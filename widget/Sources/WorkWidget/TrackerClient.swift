@@ -24,6 +24,10 @@ struct Snapshot: Equatable {
     var pauses: Int = 0
     var start: Date?
 
+    /// What the session is being spent on, if it was ever named. Optional in the
+    /// tracker and optional here: most sessions never get one.
+    var task: String?
+
     /// Set when the tracker could not be read at all. Reported, never repaired --
     /// the widget will not guess what a corrupt file meant.
     var fault: String?
@@ -34,12 +38,20 @@ struct Snapshot: Equatable {
 }
 
 /// The shape `tracker.py --json status` prints.
+///
+/// It names only the keys the widget uses, and a Decodable ignores what it was
+/// not told to expect -- which is what keeps this struct from having to change
+/// every time the tracker learns to say something new.
 private struct StatusPayload: Decodable {
     let state: Snapshot.State
     let start: String?
     let workedSeconds: Int
     let pausedSeconds: Int
     let pauses: Int
+
+    /// Absent from a payload written before the tracker learned about tasks, and
+    /// null whenever the session simply has none. Both mean the same thing.
+    let task: String?
 }
 
 enum TrackerError: LocalizedError {
@@ -189,7 +201,8 @@ struct TrackerClient {
             workedSeconds: payload.workedSeconds,
             pausedSeconds: payload.pausedSeconds,
             pauses: payload.pauses,
-            start: payload.start.flatMap { ISO8601DateFormatter().date(from: $0) }
+            start: payload.start.flatMap { ISO8601DateFormatter().date(from: $0) },
+            task: payload.task
         )
     }
 

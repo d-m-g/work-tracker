@@ -11,11 +11,16 @@
 //   * The dot carries the colour and the word stays ink.
 //   * The warm colour appears only while the session is live.
 //
-// The panel deliberately does *not* show the session's task, though the tracker
-// records one and `--json status` reports it. This is a clock you glance at, and
-// a glance holds one number; a line of prose in it is a line of prose you end up
-// reading instead. The task belongs where you have already chosen to look at the
-// day in full -- the web viewer, which is one button away, on the left.
+// The panel shows the session's task only when you ask for it. A glance holds
+// one number, and a line of prose sitting permanently under the clock is a line
+// of prose you end up reading instead of glancing at; so the task waits in the
+// caption's slot, under the state, and takes it over while the pointer rests on
+// the readout. Reaching for it is the asking.
+//
+// It takes over the slot rather than being given one of its own: the panel is a
+// fixed size, and a caption that appeared would move the clock. Nothing here
+// moves. The line is one line wide either way, capped, and the tail of a long
+// task is left to the tooltip rather than to the layout.
 
 import SwiftUI
 
@@ -24,10 +29,25 @@ struct MiniPlayer: View {
     /// number to change when a control is added.
     static let size = CGSize(width: 276, height: 68)
 
+    /// What the caption line may occupy. The panel is a fixed width and the
+    /// controls have first claim on it, so this is what is left once the padding,
+    /// the dot, the gaps and three buttons have been paid for. A task longer than
+    /// this is truncated, never allowed to push anything.
+    private static let captionWidth: CGFloat = 118
+
     @ObservedObject var model: TrackerModel
     @State private var breathing = false
 
+    /// The pointer is resting on the readout, so the caption gives its line to
+    /// the task.
+    @State private var reading = false
+
     private var snapshot: Snapshot { model.snapshot }
+
+    /// A task, and someone reaching for it. Either half missing and the caption
+    /// stays as it was -- there is nothing to swap to on a session that was never
+    /// given a name.
+    private var showingTask: Bool { reading && snapshot.task != nil }
 
     var body: some View {
         HStack(spacing: 11) {
@@ -77,6 +97,21 @@ struct MiniPlayer: View {
             clock
             caption
         }
+        // The whole readout is the target, not the caption alone: a 9pt line is
+        // too small a thing to have to hit, and the clock above it is the part
+        // you were already looking at.
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(swap) { reading = hovering }
+        }
+    }
+
+    /// Long enough to read as a swap rather than a flicker, short enough that the
+    /// line is there by the time you have finished reaching for it.
+    private var swap: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            ? nil
+            : .easeOut(duration: 0.18)
     }
 
     private var clock: some View {
@@ -93,23 +128,60 @@ struct MiniPlayer: View {
         .kerning(-0.5)
     }
 
+    // Three things want this one line, and they are ranked. A fault outranks
+    // everything -- it is the one thing you must not be able to hover away. Then
+    // the task, while you are reaching for it. Then the state, which is what the
+    // line says the rest of the time.
+    //
+    // The state and the task are stacked, not switched, so they cross over in
+    // place: one lifts out as the other rises in, and neither can resize a slot
+    // the other is standing in.
     @ViewBuilder
     private var caption: some View {
         if let fault = snapshot.fault ?? model.complaint {
-            Text(fault)
-                .font(Face.label(9))
-                .kerning(0.8)
-                .foregroundStyle(Palette.fault)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            line(fault, colour: Palette.fault, kerning: 0.8)
                 .help(fault)
         } else {
-            Text(captionText)
-                .font(Face.label(9))
-                .kerning(1.3)
-                .foregroundStyle(Palette.ink2)
-                .lineLimit(1)
+            ZStack(alignment: .leading) {
+                line(captionText, colour: Palette.ink2, kerning: 1.3)
+                    .opacity(showingTask ? 0 : 1)
+                    .offset(y: showingTask ? -3 : 0)
+
+                if let task = snapshot.task {
+                    // Ink, where the state is recessive ink: this is the line you
+                    // asked for, so for as long as you hold it, it is the one you
+                    // are meant to be reading.
+                    //
+                    // And set as prose, where the state is stamped: RUNNING and
+                    // PAUSED are the instrument's own small vocabulary and can be
+                    // stamped like a label, but a task is a sentence you wrote.
+                    // Letterspaced capitals would be both harder to read and half
+                    // again as wide -- on a line this short, that is the
+                    // difference between a task you can read and a task that is
+                    // three words and an ellipsis.
+                    line(task, colour: Palette.ink, kerning: 0)
+                        .opacity(showingTask ? 1 : 0)
+                        .offset(y: showingTask ? 0 : 3)
+                        // A task may run to 200 characters and the line is one
+                        // line. The tail goes to the tooltip rather than to a
+                        // marquee: a caption that crawls is a caption you have to
+                        // wait for, and this one is meant to be glanced at too.
+                        .help(task)
+                }
+            }
         }
+    }
+
+    /// One line of stamped caption, whatever it says. Capped and truncated at the
+    /// source, so nothing a session was named can move anything.
+    private func line(_ text: String, colour: Color, kerning: CGFloat) -> some View {
+        Text(text)
+            .font(Face.label(9))
+            .kerning(kerning)
+            .foregroundStyle(colour)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: MiniPlayer.captionWidth, alignment: .leading)
     }
 
     private var captionText: String {
