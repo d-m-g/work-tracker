@@ -7,12 +7,14 @@ import { useTracker } from './lib/useTracker.js'
 /**
  * The viewer.
  *
- * Read-only by design: no start/stop buttons. The CLI and the Shortcuts remain
- * the single writer of the JSON files, so the browser can never race a Shortcut
- * and corrupt a session. This is a window onto the data, not a second way in.
+ * It writes now, and it does so through the same door as everything else: each
+ * button is one call into the same tracker the CLI and the Shortcuts drive. There
+ * is still exactly one writer of the JSON files — the browser is another caller of
+ * it, not a second one. Nothing is rendered optimistically: what you see after a
+ * click is the state the server read back afterwards.
  */
 export default function App() {
-  const { status, sessions, error } = useTracker()
+  const { status, sessions, error, refusal, busy, send } = useTracker()
 
   // One axis for every strip on the page, live and archived alike. Sharing it is
   // what makes the days comparable: a late start *looks* late.
@@ -27,9 +29,11 @@ export default function App() {
     <main className="page">
       <header className="masthead">
         <h1>Work Tracker</h1>
-        <p className="dim">Read-only. Start, pause and stop from the CLI or the shortcuts.</p>
+        <p className="dim">Start, pause and stop from here, the shortcuts, or the CLI.</p>
       </header>
 
+      {/* Two different things, and they are never conflated. The tracker being
+          unreachable is a fault. The tracker saying no is an answer. */}
       {error && (
         <p className="fault" role="alert">
           Can’t reach the tracker — {error}. Is <code>python3 web/server.py</code> still
@@ -37,8 +41,14 @@ export default function App() {
         </p>
       )}
 
-      <LiveSession status={status} axis={axis} />
-      <History sessions={sessions} axis={axis} />
+      {refusal && (
+        <p className="refusal" role="alert">
+          {refusal}
+        </p>
+      )}
+
+      <LiveSession status={status} axis={axis} busy={busy} send={send} />
+      <History sessions={sessions} axis={axis} send={send} />
     </main>
   )
 }

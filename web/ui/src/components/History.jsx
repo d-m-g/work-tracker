@@ -1,9 +1,16 @@
 import { useState } from 'react'
 import { formatCompact, formatDate, formatDuration, formatTime } from '../lib/format.js'
 import Strip, { Ruler } from './Strip.jsx'
+import TaskField from './TaskField.jsx'
 
-/** One archived day. Click it to read its pauses. */
-function Day({ session, axis, index }) {
+/**
+ * One archived day. Click it to read its pauses and to say what it was spent on.
+ *
+ * Every row opens, including one with no breaks in it — an unbroken day is
+ * exactly the kind you might want to name, and a row you cannot open is a row you
+ * cannot correct.
+ */
+function Day({ session, axis, index, send }) {
   const [open, setOpen] = useState(false)
   const breaks = session.pauses.length
 
@@ -14,9 +21,17 @@ function Day({ session, axis, index }) {
         className="day__row"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        disabled={breaks === 0}
       >
-        <span className="day__date">{formatDate(session.start)}</span>
+        <span className="day__date">
+          {formatDate(session.start)}
+          {/* The task rides under the date, quietly, and is dimmed when absent —
+              an unlabelled day says so rather than leaving a gap you have to
+              interpret. A long one is clipped here and readable in full on hover,
+              or by opening the row. */}
+          <span className={`day__task ${session.task ? '' : 'dim'}`} title={session.task ?? ''}>
+            {session.task || 'no task'}
+          </span>
+        </span>
         <span className="day__worked">{formatDuration(session.workedSeconds)}</span>
         <span className="day__strip">
           <Strip session={session} axis={axis} />
@@ -26,23 +41,34 @@ function Day({ session, axis, index }) {
         </span>
       </button>
 
-      {open && breaks > 0 && (
-        <ol className="breaks">
-          {session.pauses.map((pause, position) => (
-            <li key={`${pause.start}-${position}`}>
-              <span className="dim">
-                {formatTime(pause.start)} – {formatTime(pause.end)}
-              </span>
-              <span>{formatDuration(pause.seconds)}</span>
-            </li>
-          ))}
-        </ol>
+      {open && (
+        <div className="day__open">
+          <TaskField
+            value={session.task}
+            onCommit={(task) => send('task', { id: session.id, task })}
+            placeholder="What was this day spent on?"
+            id={`task-${session.id}`}
+          />
+
+          {breaks > 0 && (
+            <ol className="breaks">
+              {session.pauses.map((pause, position) => (
+                <li key={`${pause.start}-${position}`}>
+                  <span className="dim">
+                    {formatTime(pause.start)} – {formatTime(pause.end)}
+                  </span>
+                  <span>{formatDuration(pause.seconds)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
       )}
     </li>
   )
 }
 
-export default function History({ sessions, axis }) {
+export default function History({ sessions, axis, send }) {
   if (!sessions) return null
 
   const { totals, unreadable } = sessions
@@ -80,7 +106,7 @@ export default function History({ sessions, axis }) {
           </div>
           <ul className="days">
             {sessions.sessions.map((session, index) => (
-              <Day key={session.id} session={session} axis={axis} index={index} />
+              <Day key={session.id} session={session} axis={axis} index={index} send={send} />
             ))}
           </ul>
         </>

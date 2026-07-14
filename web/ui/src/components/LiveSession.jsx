@@ -1,5 +1,7 @@
 import { formatDuration, formatTime } from '../lib/format.js'
+import Controls, { StartForm } from './Controls.jsx'
 import Strip, { Ruler } from './Strip.jsx'
+import TaskField from './TaskField.jsx'
 
 /**
  * The hero: what the day has come to so far.
@@ -20,7 +22,7 @@ function Clock({ seconds, held }) {
   )
 }
 
-export default function LiveSession({ status, axis }) {
+export default function LiveSession({ status, axis, busy, send }) {
   if (!status) {
     return (
       <section className="live">
@@ -35,10 +37,8 @@ export default function LiveSession({ status, axis }) {
       <section className="live live--idle">
         <p className="eyebrow">Today</p>
         <Clock seconds={0} held />
-        <p className="live__caption">
-          Nothing running. Start a session with the <strong>Work Start</strong> shortcut, or
-          run <code>python3 tracker.py start</code>.
-        </p>
+        <p className="live__caption">Nothing running.</p>
+        <StartForm busy={busy} send={send} />
       </section>
     )
   }
@@ -59,13 +59,20 @@ export default function LiveSession({ status, axis }) {
 
       <p className="live__caption">
         {held ? (
-          <>
-            worked — holding since {formatTime(status.pauseStart)}, so this is not moving
-          </>
+          <>worked — holding since {formatTime(status.pauseStart)}, so this is not moving</>
         ) : (
           <>worked — started {formatTime(status.start)}</>
         )}
       </p>
+
+      <TaskField
+        value={status.task}
+        onCommit={(task) => send('task', { task })}
+        placeholder="What are you working on?"
+        id="live-task"
+      />
+
+      <Controls status={status} busy={busy} send={send} />
 
       <div className="live__timeline">
         <Ruler axis={axis} />

@@ -21,6 +21,11 @@
   --work: #2f5597; /* validated, light */
   --live: #b26a00; /* validated, light */
 
+  /* The label on a filled button. It flips with the mode rather than staying
+     white, because white on the *dark* mode's lighter blue is 3.82:1 — under the
+     4.5:1 a button label has to clear. Here it is 7.32:1; below, 4.91:1. */
+  --on-work: #ffffff;
+
   --fault: #a03027;
   --fault-bg: #f8e9e7;
 
@@ -44,6 +49,7 @@
 
     --work: #4f82d6; /* validated, dark */
     --live: #c0801f; /* validated, dark */
+    --on-work: #101216;
 
     --fault: #f08d81;
     --fault-bg: #33201d;
@@ -186,6 +192,140 @@ code {
   margin: 2rem 0 1.5rem;
 }
 
+/* ---------- writing it down ---------- */
+
+/* The task reads as a line of text, not as a form field: no box, no chrome, just
+   the sentence — until you point at it, when it admits it can be edited. An
+   instrument's engraved field, not a web form. */
+.task {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 1.1rem 0 0;
+}
+
+.task__input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0 0.25rem;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.task__input::placeholder {
+  color: var(--ink-2);
+}
+
+.task__input:hover {
+  border-bottom-color: var(--rule);
+}
+
+.task__input:focus {
+  outline: none;
+  border-bottom-color: var(--work);
+}
+
+/* Confirmation, sized to the news: it saved, which is what you expected. */
+.task__saved {
+  font-family: var(--face-label);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.task__saved--on {
+  opacity: 1;
+}
+
+/* ---------- the controls ---------- */
+
+.controls,
+.start {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+}
+
+.start__task {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.start__task::placeholder {
+  color: var(--ink-2);
+}
+
+.start__task:focus {
+  outline: none;
+  border-color: var(--work);
+}
+
+.btn {
+  flex: none;
+  padding: 0.55rem 1.1rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-family: var(--face-label);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    filter 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--work);
+  outline-offset: 2px;
+}
+
+/* The one filled button: the thing you came to press. */
+.btn--go {
+  background: var(--work);
+  color: var(--on-work);
+}
+
+/* Stop is not painted red. Ending the day is not an error, and the page has one
+   warm colour on it already — the live edge — which is the only thing that should
+   be catching your eye. Weight, not hue, is what sets this button apart. */
+.btn--stop {
+  background: none;
+  border-color: var(--rule);
+  color: var(--ink-2);
+}
+
+.btn--stop:not(:disabled):hover {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+
 .figures {
   display: flex;
   flex-wrap: wrap;
@@ -299,11 +439,11 @@ code {
 }
 
 /* The ruler must sit exactly over the strip column: the date + worked columns to
-   its left (5.5 + 6rem), and the breaks column plus the strip's own gutter to its
-   right (6.5 + 1rem). If these drift, the hours stop lining up with the ink. */
+   its left (11 + 5rem), and the breaks column plus the strip's own gutter to its
+   right (5.5 + 1rem). If these drift, the hours stop lining up with the ink. */
 .history__ruler {
-  padding-left: 11.5rem;
-  padding-right: 7.5rem;
+  padding-left: 16rem;
+  padding-right: 6.5rem;
 }
 
 .days {
@@ -318,11 +458,12 @@ code {
 
 .day__row {
   display: grid;
-  grid-template-columns: 5.5rem 6rem 1fr 6.5rem;
+  grid-template-columns: 11rem 5rem 1fr 5.5rem;
   align-items: center;
   gap: 0;
   width: 100%;
   padding: 0.85rem 0;
+  padding-right: 0.5rem;
   background: none;
   border: 0;
   text-align: left;
@@ -331,13 +472,10 @@ code {
   cursor: pointer;
 }
 
-.day__row:disabled {
-  cursor: default;
-}
-
-.day__row:hover:not(:disabled) .day__date {
+.day__row:hover .day__date {
   text-decoration: underline;
   text-underline-offset: 3px;
+  text-decoration-color: var(--rule);
 }
 
 .day__row:focus-visible {
@@ -347,11 +485,37 @@ code {
 }
 
 .day__date {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  padding-right: 1rem;
   font-family: var(--face-label);
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   transition: color 0.12s ease;
+}
+
+/* The task rides under the date: body face, not the label face, because it is the
+   one string on this row that is *yours* rather than the instrument's. It
+   truncates here and is shown in full when the row is opened. */
+.day__task {
+  overflow: hidden;
+  font-family: var(--face-body);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.day__open {
+  padding: 0 5.5rem 0.75rem 16rem;
+}
+
+.day__open .task {
+  margin-top: 0;
 }
 
 .day__worked {
@@ -374,8 +538,8 @@ code {
 
 .breaks {
   list-style: none;
-  margin: 0 0 0.75rem;
-  padding: 0 6.5rem 0 11.5rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
 }
 
 .breaks li {
@@ -393,10 +557,15 @@ code {
   font-size: 0.9rem;
 }
 
-/* ---------- faults ---------- */
+/* ---------- faults, and refusals ---------- */
 
+/* A refusal wears the same colour as a fault, exactly as it does in the widget:
+   "the tracker said no" is one idea, and it should look the same wherever you meet
+   it. It is not a crash and it is not styled like one — but it *is* the tracker
+   declining to do what you asked, and that must never be quiet. */
 .fault,
-.faults {
+.faults,
+.refusal {
   background: var(--fault-bg);
   color: var(--fault);
   border-radius: 8px;
@@ -404,7 +573,8 @@ code {
   font-size: 0.85rem;
 }
 
-.fault {
+.fault,
+.refusal {
   margin: 0 0 2rem;
 }
 
@@ -488,6 +658,7 @@ code {
 
   .day__date {
     order: 1;
+    padding-right: 0;
   }
   .day__worked {
     order: 2;
@@ -505,8 +676,16 @@ code {
   }
 
   .history__ruler,
-  .breaks {
+  .day__open {
     padding-left: 0;
     padding-right: 0;
+  }
+
+  /* The box is the thing you are here to fill in; the button can have the rest. */
+  .start {
+    flex-wrap: wrap;
+  }
+  .start__task {
+    flex-basis: 100%;
   }
 }
