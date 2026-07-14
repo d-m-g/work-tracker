@@ -1,0 +1,512 @@
+/*
+ * Work Tracker — a timekeeping instrument, not a dashboard.
+ *
+ * Ink and paper: worked time is ink laid on a track; a pause is the paper showing
+ * through, because that is what a pause is. One warm colour exists on the page —
+ * the live edge — so the only thing that is still moving is the only thing that
+ * is warm.
+ *
+ * The palette is validated (OKLCH lightness band, chroma floor, CVD separation,
+ * contrast) for both modes; the two data colours below are the passing values.
+ */
+
+:root {
+  --paper: #e9ebef;
+  --card: #ffffff;
+  --ink: #16191f;
+  --ink-2: #656d7a;
+  --rule: #d6dae1;
+  --track: #dee2e8;
+
+  --work: #2f5597; /* validated, light */
+  --live: #b26a00; /* validated, light */
+
+  --fault: #a03027;
+  --fault-bg: #f8e9e7;
+
+  --strip-h: 12px;
+  --radius: 3px;
+
+  /* An instrument panel: geometric caps for labels, mono for every number. */
+  --face-label: 'Avenir Next', 'Futura', ui-sans-serif, system-ui, sans-serif;
+  --face-data: ui-monospace, 'SF Mono', Menlo, monospace;
+  --face-body: system-ui, -apple-system, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #131519;
+    --card: #1a1d23;
+    --ink: #e8ebf1;
+    --ink-2: #8b93a1;
+    --rule: #2a2e36;
+    --track: #24282f;
+
+    --work: #4f82d6; /* validated, dark */
+    --live: #c0801f; /* validated, dark */
+
+    --fault: #f08d81;
+    --fault-bg: #33201d;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.55 var(--face-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+code {
+  font-family: var(--face-data);
+  font-size: 0.88em;
+  color: var(--ink-2);
+}
+
+.dim {
+  color: var(--ink-2);
+}
+
+/* Every label on the page is a stamped caption, not a heading. */
+.eyebrow {
+  margin: 0;
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.page {
+  max-width: 50rem;
+  margin: 0 auto;
+  padding: 4rem 1.5rem 5rem;
+}
+
+.masthead {
+  margin-bottom: 3rem;
+}
+
+.masthead h1 {
+  margin: 0;
+  font-family: var(--face-label);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.masthead p {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+}
+
+/* ---------- the live session ---------- */
+
+.live {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 1.75rem 1.75rem 1.5rem;
+  margin-bottom: 3.5rem;
+}
+
+.live__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  font-family: var(--face-label);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* The word is ink; the dot carries the colour. Text never wears the data hue —
+   it would be the one low-contrast string on the page, and colour alone is not
+   an encoding anyone can rely on. */
+.state--running {
+  color: var(--ink);
+}
+.state--held {
+  color: var(--ink-2);
+}
+
+.state__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.state--running .state__dot {
+  background: var(--live);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+.clock {
+  margin: 0.75rem 0 0;
+  font-family: var(--face-data);
+  font-size: clamp(3rem, 11vw, 4.75rem);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums; /* digits stop jittering as they tick */
+}
+
+/* The minutes are what you read; the seconds only prove it is alive. */
+.clock__seconds {
+  color: var(--ink-2);
+}
+
+.clock--held {
+  color: var(--ink-2);
+}
+
+.live__caption {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+
+.live__timeline {
+  margin: 2rem 0 1.5rem;
+}
+
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2.25rem;
+  margin: 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+
+.figures dt {
+  font-family: var(--face-label);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.figures dd {
+  margin: 0.25rem 0 0;
+  font-family: var(--face-data);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- the strip: the signature ---------- */
+
+.ruler {
+  position: relative;
+  height: 1.1rem;
+  margin-bottom: 0.4rem;
+}
+
+.ruler__tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-family: var(--face-data);
+  font-size: 0.65rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.strip {
+  position: relative;
+  height: var(--strip-h);
+}
+
+/* The track is the day that could have been worked: recessive, always there. */
+.strip__track {
+  position: absolute;
+  inset: 0;
+  background: var(--track);
+  border-radius: var(--radius);
+}
+
+.strip__seg {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: var(--radius);
+  transition: filter 0.12s ease;
+}
+
+.strip__seg--work {
+  background: var(--work);
+  /* A 2px surface gap keeps abutting blocks legible as separate blocks. */
+  box-shadow: 0 0 0 1.5px var(--card);
+}
+
+/* A pause is the absence of ink. It gets no fill — only a hover target. */
+.strip__seg--pause {
+  background: transparent;
+}
+
+.strip__seg:hover {
+  filter: brightness(1.12);
+}
+
+/* The one warm mark on the page: where the day has got to, right now. */
+.strip__edge {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--live);
+  border-radius: 1px;
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+.strip__edge--held {
+  animation: none;
+  opacity: 0.55;
+}
+
+/* ---------- history ---------- */
+
+.history__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.history__head p:last-child {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+/* The ruler must sit exactly over the strip column: the date + worked columns to
+   its left (5.5 + 6rem), and the breaks column plus the strip's own gutter to its
+   right (6.5 + 1rem). If these drift, the hours stop lining up with the ink. */
+.history__ruler {
+  padding-left: 11.5rem;
+  padding-right: 7.5rem;
+}
+
+.days {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.day + .day {
+  border-top: 1px solid var(--rule);
+}
+
+.day__row {
+  display: grid;
+  grid-template-columns: 5.5rem 6rem 1fr 6.5rem;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  padding: 0.85rem 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.day__row:disabled {
+  cursor: default;
+}
+
+.day__row:hover:not(:disabled) .day__date {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.day__row:focus-visible {
+  outline: 2px solid var(--work);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.day__date {
+  font-family: var(--face-label);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: color 0.12s ease;
+}
+
+.day__worked {
+  font-family: var(--face-data);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.day__strip {
+  display: block;
+  padding-right: 1rem;
+}
+
+.day__breaks {
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-align: right;
+}
+
+.breaks {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0 6.5rem 0 11.5rem;
+}
+
+.breaks li {
+  display: flex;
+  justify-content: space-between;
+  max-width: 20rem;
+  padding: 0.25rem 0;
+  font-family: var(--face-data);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  padding: 2.5rem 0;
+  font-size: 0.9rem;
+}
+
+/* ---------- faults ---------- */
+
+.fault,
+.faults {
+  background: var(--fault-bg);
+  color: var(--fault);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  font-size: 0.85rem;
+}
+
+.fault {
+  margin: 0 0 2rem;
+}
+
+.faults {
+  list-style: none;
+  margin: 0 0 1.25rem;
+}
+
+.fault code {
+  color: inherit;
+}
+
+/* ---------- motion ---------- */
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* One orchestrated moment: the strips ink in from the left, in order. */
+@keyframes ink-in {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.strip__seg--work,
+.strip__track {
+  transform-origin: left center;
+  animation: ink-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.day {
+  --row: 0;
+}
+
+.day .strip__seg--work,
+.day .strip__track {
+  animation-delay: calc(var(--row) * 45ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------- narrow ---------- */
+
+@media (max-width: 40rem) {
+  .page {
+    padding: 2.5rem 1.1rem 3rem;
+  }
+
+  .live {
+    padding: 1.25rem;
+  }
+
+  .figures {
+    gap: 1.5rem;
+  }
+
+  /* The strip needs width to mean anything; on a phone the row stacks and the
+     strip spans the full width beneath the numbers rather than being crushed. */
+  .day__row {
+    grid-template-columns: 1fr auto;
+    gap: 0.35rem 1rem;
+    padding: 1rem 0;
+  }
+
+  .day__date {
+    order: 1;
+  }
+  .day__worked {
+    order: 2;
+    text-align: right;
+  }
+  .day__strip {
+    order: 3;
+    grid-column: 1 / -1;
+    padding: 0.35rem 0 0;
+  }
+  .day__breaks {
+    order: 4;
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
+  .history__ruler,
+  .breaks {
+    padding-left: 0;
+    padding-right: 0;
+  }
+}

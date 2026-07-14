@@ -1,0 +1,5 @@
+# Installed by `npm install`; never committed.
+node_modules/
+
+# Build output, produced by `npm run build`.
+dist/
