@@ -8,6 +8,11 @@ describes and stop reading here.
 
 Prerequisite: the Shortcuts are imported (see [../README.md](../README.md)).
 
+> **Every Shortcut here is safe to automate**, because not one of them asks you
+> anything: they run their command and show you the result. Nothing ever waits for
+> an answer, so nothing can leave the clock unstarted.
+> See [Behaviour worth knowing about](#behaviour-worth-knowing-about).
+
 ---
 
 ## 1. Create the Work Focus
@@ -27,7 +32,7 @@ If you do not already have one:
 6. Click **Next**, then **Add Action**.
 7. Search for **Run Shortcut** and add it.
 8. Set the shortcut to **Work Start**.
-9. Turn **Ask Before Running** *off*, so the session starts silently.
+9. Turn **Ask Before Running** *off*, so the session starts without a confirmation.
 10. Click **Done**.
 
 ## 3. Stop the session when the Focus turns off
@@ -38,19 +43,25 @@ Repeat the steps above with two changes:
 * at step 8, choose **Work Stop**.
 
 That is the whole automation. Turn the Work Focus on, and a session starts; turn
-it off, and the session is archived under `sessions/`.
+the Focus off, and the session is archived under `sessions/`.
 
 ---
 
 ## Behaviour worth knowing about
 
+**Nothing here ever asks you a question.** `Work Start` runs `start` and nothing
+else -- no dialog, no prompt, no deadline. An automation that fired at 09:00 has
+nobody there to answer anything, and a prompt with nobody to answer it is a clock
+that never started. So each Shortcut does the one thing it can always do
+correctly, and gets out of the way.
+
 **Starting twice is safe, and so is stopping twice.** If a session is already
 running, `Work Start` fails with *"a session is already in progress"* and changes
 nothing; the existing session keeps running and its timings are untouched. If no
-session is running, `Work Stop` fails with *"no session is in progress"* and
-writes nothing. In both cases the tracker refuses the operation rather than
-corrupting state, so a Focus that flickers on and off cannot damage your data --
-you will just see a notification saying the command was refused.
+session is running, `Work Stop` fails with *"no session is in progress"* and writes
+nothing. In both cases the tracker refuses the operation rather than corrupting
+state, so a Focus that flickers on and off cannot damage your data -- you will just
+see a notification saying so.
 
 **The Focus only drives start and stop.** Pause and resume stay manual, which is
 usually what you want: stepping away for coffee is not the same thing as leaving
@@ -89,7 +100,8 @@ shortcuts run "Work Toggle"
 shortcuts run "Work Stop"
 ```
 
-Equally, you can skip Shortcuts altogether and call the tracker directly:
+Equally, you can skip Shortcuts altogether and call the tracker directly — which
+is the better choice for anything unattended:
 
 ```sh
 /usr/bin/python3 /Users/dmitriigorovoi/_WORK_PROG/work-tracker/tracker.py start

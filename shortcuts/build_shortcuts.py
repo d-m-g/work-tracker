@@ -12,12 +12,23 @@ Running this script produces five double-clickable, importable files:
 Each one contains two actions:
 
 1. **Run Shell Script** -- invokes ``<python> <repo>/tracker.py <command>``;
-2. **Show Notification** -- displays that command's output, so a Shortcut run
-   from a menu bar or a Focus trigger still tells you what happened.
+2. **Show Notification** -- displays that command's output, so a Shortcut run from
+   a menu bar or a Focus trigger still tells you what happened.
+
+None of them asks you anything
+------------------------------
+
+A Shortcut runs the command and gets out of the way. In particular **Work Start**
+starts the session and says so; it does not stop to ask you anything first.
+That is what makes it safe to put on a Focus automation or a time-of-day trigger:
+a dialog nobody is there to answer is a clock that never started, and that is a
+failure you would not notice until the end of the day.
 
 Both the interpreter and the repository path are absolute and are baked in at
 build time. That is deliberate: Shortcuts runs shell scripts with a minimal
 environment, so neither ``PATH`` nor the working directory can be relied upon.
+Every value interpolated into a script is quoted for the shell, so a path
+containing a space or a quote is an argument and never code.
 
 The interpreter defaults to ``/usr/bin/python3`` -- the one macOS itself ships --
 so the Shortcuts keep working across Homebrew upgrades and on a clean machine.
@@ -52,10 +63,10 @@ DEFAULT_PYTHON: Final[Path] = Path("/usr/bin/python3")
 
 #: One entry per Shortcut: (name, tracker command, notification title).
 #:
-#: 'Work Toggle' is the one meant for a keyboard shortcut: it runs 'toggle',
-#: which starts, pauses or resumes depending on the state, so a single key can
-#: drive the whole day. Its title is generic because -- unlike the others -- it
-#: does not know in advance which of the three things it will report.
+#: 'Work Toggle' is the one meant for a keyboard shortcut: it runs 'toggle', which
+#: starts, pauses or resumes depending on the state, so a single key can drive the
+#: whole day. Its title is generic because -- unlike the others -- it does not know
+#: in advance which of the three things it will report.
 SHORTCUTS: Final[Tuple[Tuple[str, str, str], ...]] = (
     ("Work Start", "start", "Work started"),
     ("Work Pause", "pause", "Work paused"),
@@ -72,18 +83,28 @@ _ICON: Final[Dict[str, int]] = {
 }
 
 
-def _shell_script_action(python: Path, command: str, output_uuid: str) -> Dict[str, Any]:
-    """Build the *Run Shell Script* action for one tracker command.
+def _shell_quote(text: str) -> str:
+    """Render ``text`` as a single shell word, whatever it contains."""
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def _script(python: Path, command: str) -> str:
+    """Build the shell script for one Shortcut."""
+    tracker = f"{_shell_quote(str(python))} {_shell_quote(str(REPO_ROOT / 'tracker.py'))}"
+
+    # '2>&1' folds stderr into stdout so a refusal ("no session is in progress")
+    # reaches the notification instead of vanishing into a log nobody reads.
+    return f"{tracker} {command} 2>&1"
+
+
+def _shell_script_action(script: str, output_uuid: str) -> Dict[str, Any]:
+    """Build the *Run Shell Script* action.
 
     Args:
-        python: Absolute path to the interpreter.
-        command: The tracker subcommand (``start``, ``pause``, ...).
-        output_uuid: Identifier under which this action's output is published,
-            so the notification action can refer back to it.
+        script: The shell source to run.
+        output_uuid: Identifier under which this action's output is published, so
+            the notification action can refer back to it.
     """
-    # '2>&1' folds stderr into stdout so a failure ("no session is in progress")
-    # reaches the notification instead of vanishing into a log nobody reads.
-    script = f'"{python}" "{REPO_ROOT / "tracker.py"}" {command} 2>&1'
     return {
         "WFWorkflowActionIdentifier": "is.workflow.actions.runshellscript",
         "WFWorkflowActionParameters": {
@@ -127,9 +148,10 @@ def _notification_action(title: str, output_uuid: str) -> Dict[str, Any]:
 def build_shortcut(python: Path, command: str, title: str) -> Dict[str, Any]:
     """Assemble the full plist document for one Shortcut."""
     output_uuid = str(uuid.uuid4())
+
     return {
         "WFWorkflowActions": [
-            _shell_script_action(python, command, output_uuid),
+            _shell_script_action(_script(python, command), output_uuid),
             _notification_action(title, output_uuid),
         ],
         "WFWorkflowClientVersion": "1462.2",

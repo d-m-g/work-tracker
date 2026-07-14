@@ -129,6 +129,16 @@ command and shows the result as a notification.
 pauses or resumes depending on where the session already is -- one key for the
 whole day, the way a play/pause button works.
 
+### None of them asks you anything
+
+A Shortcut runs its command and gets out of the way. **Work Start** starts the
+session and says so; it does not stop to ask what the session is for.
+
+That is what makes every one of them safe to automate. A Shortcut that asked first
+would be a Shortcut that could not be put on a Focus trigger: the dialog would sit
+there unanswered while you were still on the train, and the clock would never
+start -- the kind of failure you only discover at six in the evening.
+
 ### Import them
 
 They are already built, in [`shortcuts/`](shortcuts/). Double-click each
