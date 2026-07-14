@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Session data, not source. The repository is also the default data directory
+# (WORK_TRACKER_HOME), so the live session and its archives land here -- but
+# your working hours are yours, and they are not part of the program.
+# sessions/.gitkeep is tracked so the directory itself survives a clone.
+/current.json
+/sessions/*.json
