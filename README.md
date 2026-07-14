@@ -11,11 +11,15 @@ own outright.
   cannot leave you with a half-written session.
 * **Runs on the Python macOS ships.** No Homebrew, no virtualenv, no `pip install`.
 
-There is also an **optional React viewer** for browsing your sessions in a
-browser. It is the one part of the project with third-party dependencies (React
-and Vite, via npm), and it is entirely opt-in: the tracker, the CLI and the
-Shortcuts never touch it, and everything above stays true whether you build it or
-not.
+Each session can carry one line of free text — **what you were working on**. It is
+always optional, and you can write it at any time: when you start, halfway through
+the afternoon, or a week later against a day already in the archive.
+
+There is also an **optional React viewer**, which shows your sessions and drives
+them — start, pause, resume, stop, and a box to say what you are doing. It is the
+one part of the project with third-party dependencies (React and Vite, via npm),
+and it is entirely opt-in: the tracker, the CLI and the Shortcuts never touch it,
+and everything above stays true whether you build it or not.
 
 ---
 
@@ -69,18 +73,21 @@ python3 tracker.py resume    # come back
 python3 tracker.py toggle    # do whichever of those three the state calls for
 python3 tracker.py stop      # end the session and archive it
 python3 tracker.py status    # what's going on right now?
+python3 tracker.py task      # what am I working on?
 ```
 
 A worked example:
 
 ```console
-$ python3 tracker.py start
+$ python3 tracker.py start --task "rewriting the parser"
 Started session 2026-07-14_09-15-02 at 2026-07-14T09:15:02+03:00.
+Task:    rewriting the parser
 
 $ python3 tracker.py status
 State:   running
 Session: 2026-07-14_09-15-02
 Started: 2026-07-14T09:15:02+03:00
+Task:    rewriting the parser
 Worked:  1:32:11
 Paused:  0:00:00
 Pauses:  0
@@ -92,6 +99,7 @@ $ python3 tracker.py status
 State:   paused
 Session: 2026-07-14_09-15-02
 Started: 2026-07-14T09:15:02+03:00
+Task:    rewriting the parser
 Worked:  1:32:11          # frozen while paused
 Paused:  0:12:45          # ...this is what grows
 Pauses:  0 (one in progress)
@@ -101,11 +109,34 @@ Resumed at 2026-07-14T10:59:58+03:00 after 0:12:45 paused.
 
 $ python3 tracker.py stop
 Stopped session 2026-07-14_09-15-02.
+Task:    rewriting the parser
 Worked:  7:47:15
 Paused:  0:12:45 across 1 pause(s)
 Gross:   8:00:00
 Saved:   /Users/dmitriigorovoi/_WORK_PROG/work-tracker/sessions/2026-07-14_09-15-02.json
 ```
+
+### Saying what you are working on
+
+Every session can carry one line of free text: what it is for. It is **always
+optional**, and it can be written at any point — including after the day is over.
+That is the whole design: being made to name a session before you are allowed to
+start one would be a reason not to start one.
+
+```sh
+python3 tracker.py start --task "rewriting the parser"   # say it up front
+python3 tracker.py task "code review"                    # ...or change it mid-session
+python3 tracker.py task                                  # what did I say it was?
+python3 tracker.py task --clear                          # never mind
+
+# The day is already archived and you never said what it was? Say it now.
+python3 tracker.py task --session 2026-07-14_09-15-02 "rewriting the parser"
+```
+
+You can equally type it into the box in the [web viewer](#web-viewer), which is
+where naming a session is least in the way. Whichever you use, the label is the
+*only* thing that a finished session will let you rewrite: every timestamp and
+every duration in that file still comes from what the clock actually recorded.
 
 ### Options
 
@@ -113,6 +144,9 @@ Saved:   /Users/dmitriigorovoi/_WORK_PROG/work-tracker/sessions/2026-07-14_09-15
 | --- | --- |
 | `--json` | Print the result as JSON instead of text. Useful for scripting: `python3 tracker.py --json status \| jq .workedSeconds` |
 | `--root DIR` | Use `DIR` as the data directory instead of the repository. |
+| `--task TEXT` | On `start` and `toggle`: what the session is for. |
+| `--session ID` | On `task`: act on an archived session instead of the running one. |
+| `--clear` | On `task`: remove the label. |
 
 The data directory can also be set with the `WORK_TRACKER_HOME` environment
 variable. The default is the repository itself.
@@ -121,9 +155,9 @@ variable. The default is the repository itself.
 
 ## macOS Shortcuts
 
-Five Shortcuts wrap the commands: **Work Start**, **Work Pause**, **Work
-Resume**, **Work Toggle** and **Work Stop**. Each one runs the corresponding CLI
-command and shows the result as a notification.
+Five Shortcuts wrap the commands: **Work Start**, **Work Pause**, **Work Resume**,
+**Work Toggle** and **Work Stop**. Each one runs the corresponding CLI command and
+shows the result as a notification.
 
 **Work Toggle** is the one worth putting on a key. It runs `toggle`, so it starts,
 pauses or resumes depending on where the session already is -- one key for the
@@ -138,6 +172,12 @@ That is what makes every one of them safe to automate. A Shortcut that asked fir
 would be a Shortcut that could not be put on a Focus trigger: the dialog would sit
 there unanswered while you were still on the train, and the clock would never
 start -- the kind of failure you only discover at six in the evening.
+
+So the label is written where you can see what you are typing: the box in the
+[web viewer](#web-viewer), at any point during the day, or `tracker.py task` from
+a terminal. A session started in silence is never a session you have lost the name
+of -- the label is amendable for as long as the file exists, and naming yesterday
+tomorrow costs you nothing.
 
 ### Import them
 
@@ -203,9 +243,9 @@ Step-by-step instructions are in [`shortcuts/AUTOMATION.md`](shortcuts/AUTOMATIO
 ## Menu bar widget
 
 A small always-on-top panel — a mini player for your working day — and a live
-clock in the menu bar. Unlike the web viewer, it *can* write: its two buttons run
-the same CLI commands the Shortcuts run, so it is another caller of the single
-writer rather than a second writer.
+clock in the menu bar. Its two buttons run the same CLI commands the Shortcuts
+run, so — like the web viewer, and like every other way into the tracker — it is
+another *caller* of the single writer rather than a second writer.
 
 It is **optional**, like the viewer. It is Swift rather than Python, and it lives
 entirely in [`widget/`](widget/); nothing else in the project imports it, and
@@ -294,11 +334,20 @@ so the two are one instrument seen through two windows.
 
 ## Web viewer
 
-A small React app that shows the live session and every session before it. It is
-**read-only, by design**: there are no start/stop buttons. The CLI and the
-Shortcuts stay the single writer of the JSON files, so the browser can never race
-a Shortcut and corrupt a session. This is a window onto your data, not a second
-way of editing it.
+A small React app that shows the live session and every session before it, and
+drives it: **Start**, **Pause**, **Resume** and **Stop**, plus a box for saying what
+you are working on.
+
+It is not a second writer. Every button is one call into the same `WorkTracker` the
+CLI and the Shortcuts drive, so the browser cannot invent a state transition the
+CLI would refuse, cannot compute a duration the CLI would disagree with, and cannot
+corrupt a session by racing a Shortcut -- the writes are atomic, `start` claims the
+session indivisibly, and whichever caller loses is simply told no. **There is still
+exactly one writer; the browser is another caller of it.**
+
+Nothing is drawn optimistically, either. Each command answers with the status the
+server read back *after* performing it, and that is what appears on screen — so a
+click that raced ⌘F8 shows what really happened rather than what the click assumed.
 
 ### Build it once
 
@@ -327,11 +376,38 @@ from this Mac and nowhere else — your working hours are nobody else's business
 If you run the server before building the UI, it says so on the page rather than
 404-ing at you. The API works either way.
 
-### What it shows
+### It refuses writes from anywhere but this machine
+
+Now that the server can stop your session, it matters who is allowed to ask it to.
+A `POST` that arrives carrying an `Origin` header from anywhere but this machine is
+refused before it reaches the tracker, so a page you happen to have open in another
+tab cannot end your day behind your back. That check also closes DNS rebinding,
+where an attacker's *name* is made to resolve to `127.0.0.1`: the name may lie, but
+the browser still reports the origin as `evil.example`, and that is what is checked.
+
+Reads are left alone — binding to loopback already handles those — and `--host`
+anything other than loopback now prints a warning, because it means anyone who can
+reach the port can control your sessions.
+
+### What it shows, and what it lets you do
 
 * **The live session** — a large worked-time clock, polled once a second. While a
   pause is open the clock is *dimmed*, because the number really is standing
   still: worked time is frozen and paused time is the one still moving.
+* **The controls** — Start, Pause, Resume, Stop. Each button sends the *precise*
+  command it is labelled with, never `toggle`. The difference only shows itself in
+  a race, and then it matters: if a Shortcut paused the session in the second
+  before you clicked **Pause**, a `toggle` would helpfully *resume* it — the exact
+  opposite of what the button promised. `pause` refuses instead, the refusal is
+  shown, and what was on screen was true all along. A key bound to ⌘F8 has no label
+  to keep faith with, and can toggle; a button does, and cannot.
+* **A box for what you are working on** — on the live session, and on every
+  archived day. Type into it and press Enter. Writing it down late is not a lesser
+  version of writing it down on time; it is the normal case, and the archive takes
+  it. Only the label is ever rewritten.
+* **Refusals, shown rather than swallowed** — in the same fault colour the widget
+  uses, because "the tracker said no" is one idea and should look the same wherever
+  you meet it.
 * **The day as a strip** — the signature of the thing. Each session is drawn as a
   band on a shared **time-of-day** axis: worked time is ink, and a pause is the
   *absence* of ink, the track showing through. The live session carries a warm
@@ -361,17 +437,30 @@ cd web/ui && npm run dev       # terminal 2: the UI, on :5173
 
 ### How it is wired
 
-The endpoints are built by [`web/api.py`](web/api.py), which is a pure function
-of a `Storage` — no sockets, no HTTP — so every response is unit-tested without
-binding a port. [`web/server.py`](web/server.py) is a thin `http.server` wrapper
-around it: stdlib only, `GET` only, with the static file paths resolved and
-checked for containment so a crafted URL cannot escape `dist/` and read your
+The endpoints are built by [`web/api.py`](web/api.py), which is a function of a
+`Storage` — no sockets, no HTTP — so every response, *including every write*, is
+unit-tested without binding a port. [`web/server.py`](web/server.py) is a thin
+`http.server` wrapper around it: stdlib only, with the static file paths resolved
+and checked for containment so a crafted URL cannot escape `dist/` and read your
 filesystem.
 
 ```
-GET /api/status     -> {"state": "running", "workedSeconds": 1800, ...}
-GET /api/sessions   -> {"sessions": [...], "totals": {...}, "unreadable": [...]}
+GET  /api/status     -> {"state": "running", "task": "rewriting the parser", ...}
+GET  /api/sessions   -> {"sessions": [...], "totals": {...}, "unreadable": [...]}
+
+POST /api/start      {"task": "..."}   -> {"action": "start",  "status": {...}}
+POST /api/pause                        -> {"action": "pause",  "status": {...}}
+POST /api/resume                       -> {"action": "resume", "status": {...}}
+POST /api/toggle     {"task": "..."}   -> {"action": "paused", "status": {...}}
+POST /api/stop                         -> {"action": "stop",   "status": {...}, "session": {...}}
+POST /api/task       {"task": "...", "id": "<archived session, optional>"}
 ```
+
+Every command answers with the status as read back *afterwards*, which is what the
+UI renders. A refusal comes back as a `409` carrying the tracker's own sentence
+("the session is already paused") — written to be read, so it is exactly what the
+page puts on screen. A `500` means something else entirely: the tracker itself is
+in trouble, with a corrupt file or an unwritable disk.
 
 The durations are computed server-side, so the browser never reasons about clocks
 or timezones and cannot drift away from what the CLI reports.
@@ -390,6 +479,7 @@ session stops. Its presence is what "a session is running" means.
   "state": "running",
   "id": "2026-07-14_19-42-18",
   "start": "2026-07-14T19:42:18+03:00",
+  "task": "rewriting the parser",
   "pauseStart": null,
   "pauses": []
 }
@@ -400,12 +490,24 @@ session stops. Its presence is what "a session is running" means.
 | `state` | `"running"` \| `"paused"` | What the session is doing right now. |
 | `id` | string | Identifier, derived from the start time. Also the archive's filename. |
 | `start` | ISO-8601 | When the session began. |
+| `task` | string \| `null` | What it is being spent on. Optional, always. |
 | `pauseStart` | ISO-8601 \| `null` | When the current pause began; `null` unless `state` is `paused`. |
 | `pauses` | array | Pauses that have already *finished*. |
 
 `state` and `pauseStart` are two views of one fact, and the tracker enforces that
 they agree: `pauseStart` is set if and only if `state` is `paused`. A file that
 breaks this rule is rejected rather than guessed at.
+
+`task` is the one free-text field, and the rules around it are worth stating:
+
+* it is **never required** — a file written before the field existed reads back as
+  a session nobody labelled, not as a corrupt one;
+* whitespace is collapsed, so it is always one line, and a blank string is folded
+  to `null` — there is one way to say "nothing written down", not two;
+* the tracker is **strict about what it accepts and lenient about what it holds**:
+  a label longer than 200 characters is refused when you type it, but one that is
+  already on disk still loads. Refusing to read it would not make it shorter; it
+  would only cost you the day it belongs to.
 
 ### Every pause is stored separately
 
@@ -428,7 +530,8 @@ the source of truth, and `seconds` is always recomputed from them.
 ### When a session ends: `sessions/<id>.json`
 
 On `stop`, the session is written to `sessions/`, and only then is `current.json`
-deleted. Archived sessions are immutable; the tracker will never overwrite one.
+deleted. An archived session's *measurements* are immutable: nothing rewrites a
+timestamp or a duration, and nothing will overwrite one day's file with another.
 
 ```json
 {
@@ -436,6 +539,7 @@ deleted. Archived sessions are immutable; the tracker will never overwrite one.
   "start": "2026-07-14T19:42:18+03:00",
   "end": "2026-07-14T20:31:07+03:00",
   "status": "completed",
+  "task": "rewriting the parser",
   "grossSeconds": 2929,
   "pausedSeconds": 325,
   "workedSeconds": 2604,
@@ -448,6 +552,15 @@ deleted. Archived sessions are immutable; the tracker will never overwrite one.
   ]
 }
 ```
+
+Its `task` is the single exception, and is amendable for as long as the file exists
+(`tracker.py task --session <id> "..."`, or the box in the web viewer). Forgetting
+to say what you were working on is not the same as not having worked, and the
+alternative to letting you fix it is a column of unlabelled days you can no longer
+identify. The amendment rewrites nothing but the label: `storage.update_session`
+*refuses to create a file*, so `archive` stays the only thing in the system that
+can bring a session into existence, and a mistyped id can only ever fail — never
+quietly mint a new, half-empty day next to the real ones.
 
 ### Timestamps
 
@@ -496,16 +609,16 @@ work-tracker/
         utils.py          time, formatting, atomic JSON writes
         models.py         the dataclasses; the duration arithmetic
         storage.py        the only module that touches the filesystem
-        tracker.py        the service layer: the six operations
+        tracker.py        the service layer: every operation
         cli.py            argument parsing, rendering, exit codes
     sessions/             one JSON file per completed session
     shortcuts/            the five macOS Shortcuts, and their builder
     web/
-        api.py            builds the JSON payloads (pure; no HTTP)
+        api.py            builds the JSON payloads, runs the commands (no HTTP)
         server.py         stdlib http.server: the API + the built UI
         ui/               the React app (Vite); the only npm in the project
     widget/               the always-on-top mini player (Swift; optional)
-    tests/                113 unit tests
+    tests/                180 unit tests
     README.md
 ```
 
@@ -564,10 +677,11 @@ discard the first session.
 python3 -m unittest discover -s tests -t tests -v
 ```
 
-113 tests, no dependencies, no network, no sleeping. They cover the duration
+180 tests, no dependencies, no network, no sleeping. They cover the duration
 arithmetic, every state transition and every illegal one, JSON round-trips,
-corrupt-file handling, the atomicity guarantees, the CLI's exit codes, and the
-web API's payloads.
+corrupt-file handling, the atomicity guarantees, the CLI's exit codes, the web
+API's payloads, every web command and every refusal, and the rules around the task
+label — including that an id naming an archive can never escape `sessions/`.
 
 The suite passes on both `/usr/bin/python3` (3.9) and current Python (3.14).
 
@@ -581,12 +695,18 @@ code -- never a traceback:
 | Situation | Message | Exit |
 | --- | --- | --- |
 | `start` with a session already running | `a session is already in progress` | 1 |
-| `pause` / `resume` / `stop` with no session | `no session is in progress` | 1 |
+| `pause` / `resume` / `stop` / `task` with no session | `no session is in progress` | 1 |
 | `pause` when already paused | `the session is already paused` | 1 |
 | `resume` when not paused | `the session is not paused` | 1 |
+| `task --session` naming no archive | `no such session: ...` | 1 |
+| A task longer than 200 characters | `a task may be at most 200 characters` | 1 |
 | `current.json` is corrupt | `... is not valid JSON` | 1 |
-| Unknown command | argparse usage message | 2 |
+| Unknown command, or `task "x" --clear` | argparse usage message | 2 |
 | Success | — | 0 |
+
+The web UI reports the same refusals, in the same words: they come back as `409`s
+(or `404`s, or `400`s) carrying the tracker's own sentence, and the page shows that
+sentence. There is one set of rules and one place they are enforced.
 
 `toggle` is absent from that table because it has no wrong state to be in: it
 picks whichever operation the current state allows. It can still report a corrupt
@@ -620,12 +740,18 @@ natural next step rather than a rewrite:
   corrected rather than merely regretted. The `status` field on an archived
   session exists precisely so an `"auto-closed"` outcome can be distinguished
   from a `"completed"` one.
-* **Projects and tags.** `start --project pecto` would add one optional key to
-  both documents. Old sessions without it stay perfectly valid.
-* **Editing a session.** Because archives are plain JSON and the totals are
-  recomputed from timestamps on read, correcting a forgotten `stop` is already
-  just editing a file -- a future `amend` command would only be a friendlier way
-  of doing what you can do in a text editor today.
+* **Projects and tags.** `task` is one line of free text, deliberately: it is a
+  note to yourself, not a taxonomy. A `--project` key would be a *second* optional
+  string on both documents, and the schema is already shaped to take one — but it
+  is only worth adding once you want something that *groups* sessions rather than
+  merely describes them.
+* **Correcting the clock.** Because archives are plain JSON and the totals are
+  recomputed from timestamps on read, fixing a forgotten `stop` is already just
+  editing a file -- a future `amend` command would only be a friendlier way of
+  doing what a text editor does today. Note what the tracker deliberately does
+  *not* do meanwhile: `task` is the only amendment it will make to a finished day,
+  and it touches no measurement.
 A menu bar indicator used to be on this list. It is now
-[`widget/`](#menu-bar-widget), and it needed no schema change and no new writer —
-which is the argument for the list above.
+[`widget/`](#menu-bar-widget), and it needed no schema change and no new writer.
+So did the task label; so did the buttons in the viewer, which are a new *caller*
+and not a new writer — which is the argument for the list above.
