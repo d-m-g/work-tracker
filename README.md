@@ -24,6 +24,7 @@ not.
 * [Installation](#installation)
 * [Usage](#usage)
 * [macOS Shortcuts](#macos-shortcuts)
+* [Menu bar widget](#menu-bar-widget)
 * [Web viewer](#web-viewer)
 * [JSON format](#json-format)
 * [How time is calculated](#how-time-is-calculated)
@@ -186,6 +187,98 @@ cannot rely on your `PATH` or on a working directory.
 
 Turning on your Work Focus can start a session, and turning it off can stop it.
 Step-by-step instructions are in [`shortcuts/AUTOMATION.md`](shortcuts/AUTOMATION.md).
+
+---
+
+## Menu bar widget
+
+A small always-on-top panel — a mini player for your working day — and a live
+clock in the menu bar. Unlike the web viewer, it *can* write: its two buttons run
+the same CLI commands the Shortcuts run, so it is another caller of the single
+writer rather than a second writer.
+
+It is **optional**, like the viewer. It is Swift rather than Python, and it lives
+entirely in [`widget/`](widget/); nothing else in the project imports it, and
+"Python 3 only, no third-party dependencies" stays true of everything else
+whether you build it or not. It has no dependencies of its own either — AppKit
+and SwiftUI are system frameworks — so it builds offline.
+
+### Build and run it
+
+```sh
+cd widget
+./make-app.sh          # builds WorkWidget.app
+open WorkWidget.app
+```
+
+Or, from a checkout, without bundling anything:
+
+```sh
+cd widget && swift run
+```
+
+**Requirements:** macOS 13 or newer, and the Swift toolchain (Xcode, or the
+Command Line Tools).
+
+To have it there every morning, add `widget/WorkWidget.app` to **System Settings
+→ General → Login Items**.
+
+### What it does
+
+* **A worked-time clock**, always on top, over full-screen apps and across every
+  Space — which is where you are when you lose track of the time. The seconds are
+  dimmed, because the minutes are what you read and the seconds only prove it is
+  alive; while a pause is open the clock dims whole, because the number really is
+  standing still.
+* **Play/pause**, which runs `toggle` — so it starts, pauses or resumes depending
+  on where the session already is, exactly like ⌘F8, and it can never end your
+  session. **Stop** is a separate button, and a separate, deliberate act.
+* **The same controls in the menu bar**, retitled for the state you are in: *Start
+  Session*, *Pause*, *Resume*, *Stop Session*.
+* **The live worked time in the menu bar** — minutes only. A number that repaints
+  every second in the corner of your eye is a distraction, and the panel is right
+  there when you want the seconds.
+* **Refusals, shown rather than swallowed.** If the CLI says no — or if
+  `current.json` is corrupt — the widget says so in the fault colour and disables
+  the buttons. It never guesses.
+
+Clicking it does not steal focus (`.nonactivatingPanel`), so pausing never pulls
+you out of what you were typing in. Drag it anywhere; it remembers where.
+
+**Quitting the widget does not stop your session.** The tracker is files on disk
+and goes on running whether anything is watching it or not — which is also why
+you can quit and relaunch mid-session and it simply picks the session back up.
+
+### How it is wired
+
+It shells out to the CLI, once per tick, and parses `--json status`:
+
+```
+python3 tracker.py --json status     -> the clock
+python3 tracker.py toggle            -> the play/pause button
+python3 tracker.py stop              -> the stop button
+```
+
+It deliberately does not read `current.json`, and it deliberately does not do the
+duration arithmetic itself. Both would be easy, and both would be a second
+implementation of rules that already exist in one place — and a second
+implementation is a thing that can drift. The CLI computes the durations, so the
+widget cannot disagree with `tracker.py status`.
+
+Polling is therefore the whole cost of the widget: one short-lived `python3` per
+tick. It is paced accordingly — every second while running, every two while
+paused (worked time is frozen, so there is nothing to animate), every five while
+idle.
+
+It finds the repository by checking, in order: `--root DIR`, the
+`WORK_TRACKER_HOME` variable the CLI already honours, the `WorkTrackerHome` user
+default (which `make-app.sh` sets, since an app in `/Applications` cannot find
+the repository by looking around itself), and finally by walking up from the
+executable — which is what makes `swift run` work in a fresh clone with no
+configuration at all.
+
+The palette is not re-picked by eye: it is the viewer's, re-expressed in Swift,
+so the two are one instrument seen through two windows.
 
 ---
 
@@ -401,6 +494,7 @@ work-tracker/
         api.py            builds the JSON payloads (pure; no HTTP)
         server.py         stdlib http.server: the API + the built UI
         ui/               the React app (Vite); the only npm in the project
+    widget/               the always-on-top mini player (Swift; optional)
     tests/                113 unit tests
     README.md
 ```
@@ -522,6 +616,6 @@ natural next step rather than a rewrite:
   recomputed from timestamps on read, correcting a forgotten `stop` is already
   just editing a file -- a future `amend` command would only be a friendlier way
   of doing what you can do in a text editor today.
-* **A menu bar indicator.** `--json status` exists for exactly this: any status
-  bar tool (SwiftBar, xbar, or a few lines of Swift) can poll it and show live
-  worked time without parsing human-readable text.
+A menu bar indicator used to be on this list. It is now
+[`widget/`](#menu-bar-widget), and it needed no schema change and no new writer —
+which is the argument for the list above.
