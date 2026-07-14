@@ -10,10 +10,20 @@
 //     still moving.
 //   * The dot carries the colour and the word stays ink.
 //   * The warm colour appears only while the session is live.
+//
+// The panel deliberately does *not* show the session's task, though the tracker
+// records one and `--json status` reports it. This is a clock you glance at, and
+// a glance holds one number; a line of prose in it is a line of prose you end up
+// reading instead. The task belongs where you have already chosen to look at the
+// day in full -- the web viewer, which is one button away, on the left.
 
 import SwiftUI
 
 struct MiniPlayer: View {
+    /// The panel is sized from the view, not the other way round, so there is one
+    /// number to change when a control is added.
+    static let size = CGSize(width: 276, height: 68)
+
     @ObservedObject var model: TrackerModel
     @State private var breathing = false
 
@@ -27,7 +37,7 @@ struct MiniPlayer: View {
             controls
         }
         .padding(.horizontal, 14)
-        .frame(width: 244, height: 68)
+        .frame(width: MiniPlayer.size.width, height: MiniPlayer.size.height)
         .background(Frost())
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
@@ -119,23 +129,35 @@ struct MiniPlayer: View {
 
     private var controls: some View {
         HStack(spacing: 4) {
-            // One button for the whole day, the way a play/pause button works.
+            // The way out to the history. It survives a fault deliberately: if
+            // today's session is unreadable, the archive of every other day is
+            // exactly what you would want to go and look at.
             Control(
-                symbol: snapshot.state == .running ? "pause.fill" : "play.fill",
-                help: toggleHelp,
-                action: model.toggle
+                symbol: "chart.bar.fill",
+                help: "Open the viewer",
+                busy: model.openingViewer,
+                action: model.openViewer
             )
 
-            // Stopping is a separate, deliberate act, and it only exists when
-            // there is something to stop.
-            if snapshot.isActive {
-                Control(symbol: "stop.fill", help: "End the session and archive it", action: model.stop)
+            Group {
+                // One button for the whole day, the way a play/pause button works.
+                Control(
+                    symbol: snapshot.state == .running ? "pause.fill" : "play.fill",
+                    help: toggleHelp,
+                    action: model.toggle
+                )
+
+                // Stopping is a separate, deliberate act, and it only exists when
+                // there is something to stop.
+                if snapshot.isActive {
+                    Control(symbol: "stop.fill", help: "End the session and archive it", action: model.stop)
+                }
             }
+            // Disabled rather than hidden when the tracker cannot be reached: the
+            // widget says what is wrong instead of quietly doing nothing.
+            .disabled(snapshot.fault != nil)
+            .opacity(snapshot.fault != nil ? 0.4 : 1)
         }
-        // Disabled rather than hidden when the tracker cannot be reached: the
-        // widget says what is wrong instead of quietly doing nothing.
-        .disabled(snapshot.fault != nil)
-        .opacity(snapshot.fault != nil ? 0.4 : 1)
     }
 
     private var toggleHelp: String {
@@ -151,15 +173,14 @@ struct MiniPlayer: View {
 private struct Control: View {
     let symbol: String
     let help: String
+    var busy: Bool = false
     let action: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Palette.ink)
+            face
                 .frame(width: 26, height: 26)
                 .background(
                     Circle().fill(Palette.rule.opacity(hovering ? 0.9 : 0.35))
@@ -167,8 +188,24 @@ private struct Control: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .disabled(busy)
         .onHover { hovering = $0 }
         .help(help)
+    }
+
+    @ViewBuilder
+    private var face: some View {
+        if busy {
+            // Starting the viewer's server takes a moment. Without this the click
+            // looks like it missed, and you click again.
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.6)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Palette.ink)
+        }
     }
 }
 

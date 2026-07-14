@@ -96,6 +96,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         menu.addItem(
+            withTitle: "Open Viewer",
+            action: #selector(openViewer),
+            keyEquivalent: ""
+        ).target = self
+
+        menu.addItem(
             withTitle: "Show Widget",
             action: #selector(showPanel),
             keyEquivalent: ""
@@ -135,6 +141,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func stop() {
         model?.stop()
+    }
+
+    @objc private func openViewer() {
+        model?.openViewer()
+    }
+
+    /// Close the viewer's server, but only if the widget was the one that started
+    /// it -- a server you launched in a terminal is yours, and stays up.
+    func applicationWillTerminate(_ notification: Notification) {
+        model?.closeViewer()
     }
 
     /// The panel is only ever hidden by being dragged somewhere forgotten, or by

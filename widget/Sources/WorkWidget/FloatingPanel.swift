@@ -7,7 +7,7 @@ import SwiftUI
 final class FloatingPanel: NSPanel {
     init(content: NSView) {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 244, height: 68),
+            contentRect: NSRect(origin: .zero, size: MiniPlayer.size),
             // .nonactivatingPanel is the important one: clicking the widget does
             // not steal focus, so pause/resume never pulls you out of the editor
             // you were typing in. A mini player you have to click away from is a
@@ -40,7 +40,12 @@ final class FloatingPanel: NSPanel {
 
         contentView = content
 
-        if !setFrameUsingName("WorkWidgetPanel") {
+        if setFrameUsingName("WorkWidgetPanel") {
+            // The autosaved frame carries the size the panel had when it was last
+            // put down, which is the wrong size the moment a control is added or
+            // removed. Keep where you left it; take the size from the view.
+            setContentSize(MiniPlayer.size)
+        } else {
             positionAtTopRight()
         }
     }

@@ -11,13 +11,19 @@ final class TrackerModel: ObservableObject {
     /// briefly, then cleared: it is a reply to a button press, not a state.
     @Published private(set) var complaint: String?
 
+    /// True while the viewer is being started, so the button can say it heard you.
+    /// Starting a server takes long enough to look like nothing happened.
+    @Published private(set) var openingViewer = false
+
     private let client: TrackerClient
+    private let viewer: Viewer
     private let queue = DispatchQueue(label: "work-tracker.poll")
     private var timer: Timer?
     private var complaintTask: Task<Void, Never>?
 
     init(client: TrackerClient) {
         self.client = client
+        self.viewer = Viewer(client: client)
     }
 
     // MARK: - polling
@@ -77,6 +83,23 @@ final class TrackerModel: ObservableObject {
 
     func stop() {
         act { $0.stop() }
+    }
+
+    /// Open the web viewer, starting its server first if nothing is answering.
+    func openViewer() {
+        guard !openingViewer else { return }
+        openingViewer = true
+
+        Task { @MainActor in
+            let complaint = await viewer.open()
+            openingViewer = false
+            show(complaint)
+        }
+    }
+
+    /// Only stops a server the widget itself started.
+    func closeViewer() {
+        viewer.stop()
     }
 
     private func act(_ command: @escaping (TrackerClient) -> String?) {
