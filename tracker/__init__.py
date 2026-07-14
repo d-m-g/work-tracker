@@ -6,8 +6,8 @@ Layering, from the bottom up -- each layer only knows about the ones below it:
 ``models``   the dataclasses that mirror the JSON documents, plus the duration
              arithmetic. Pure; performs no I/O.
 ``storage``  the only module that touches the filesystem.
-``tracker``  the service layer: the six operations, over an injectable clock
-             and storage.
+``tracker``  the service layer: every operation, over an injectable clock and
+             storage.
 ``cli``      argument parsing, rendering and exit codes.
 
 The public surface is re-exported here so that embedding the tracker in another
@@ -21,9 +21,17 @@ program is a one-line import::
 
 from __future__ import annotations
 
-from .models import ActiveSession, CompletedSession, Pause, SessionState, SessionStatus
-from .storage import SessionExistsError, Storage, StorageError
+from .models import (
+    MAX_TASK_LENGTH,
+    ActiveSession,
+    CompletedSession,
+    Pause,
+    SessionState,
+    SessionStatus,
+)
+from .storage import NoSuchSessionError, SessionExistsError, Storage, StorageError
 from .tracker import (
+    InvalidTaskError,
     NoActiveSessionError,
     SessionAlreadyRunningError,
     Status,
@@ -34,13 +42,16 @@ from .tracker import (
 )
 from .utils import CorruptJSONError, TrackerError
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
+    "MAX_TASK_LENGTH",
     "ActiveSession",
     "CompletedSession",
     "CorruptJSONError",
+    "InvalidTaskError",
     "NoActiveSessionError",
+    "NoSuchSessionError",
     "Pause",
     "SessionAlreadyRunningError",
     "SessionExistsError",

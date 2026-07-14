@@ -21,7 +21,7 @@ Two documents exist:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, Final
@@ -29,11 +29,14 @@ from typing import Any, Final
 from .utils import CorruptJSONError, format_timestamp, parse_timestamp
 
 __all__ = [
+    "MAX_TASK_LENGTH",
     "ActiveSession",
     "CompletedSession",
     "Pause",
     "SessionState",
     "SessionStatus",
+    "normalise_task",
+    "validate_session_id",
 ]
 
 
@@ -44,6 +47,16 @@ _ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2
 
 #: Format used to derive a session id from its start time.
 _ID_FORMAT: Final[str] = "%Y-%m-%d_%H-%M-%S"
+
+#: The longest task label the tracker will *accept*. A task is a line -- "rewriting
+#: the parser" -- not a journal entry, and it is rendered inline in a notification,
+#: a menu bar, a table row and a terminal, none of which can show a second one.
+#:
+#: The cap is checked on the way in (see :func:`tracker.tracker.checked_task`) and
+#: deliberately *not* on the way out: a file already carrying a longer label still
+#: loads. Refusing to read it would not make it shorter -- it would only cost you
+#: the day it belongs to.
+MAX_TASK_LENGTH: Final[int] = 200
 
 
 class _ValueEnum(str, Enum):
@@ -100,11 +113,38 @@ def _require_key(payload: dict[str, Any], key: str, what: str) -> Any:
     return payload[key]
 
 
-def _validate_id(raw: Any) -> str:
-    """Return ``raw`` if it is a well-formed session id, else raise."""
+def validate_session_id(raw: Any) -> str:
+    """Return ``raw`` if it is a well-formed session id, else raise.
+
+    This is the check that keeps an id safe to build a path from. It is public
+    because ids also arrive from outside a file -- the web UI names the session it
+    wants to annotate -- and every one of them has to pass through here before it
+    is allowed anywhere near :meth:`~tracker.storage.Storage.session_path`.
+
+    Raises:
+        CorruptJSONError: If ``raw`` is not a well-formed id.
+    """
     if not isinstance(raw, str) or not _ID_PATTERN.match(raw):
         raise CorruptJSONError(f"malformed session id: {raw!r}")
     return raw
+
+
+def normalise_task(raw: Any) -> str | None:
+    """Return ``raw`` as a clean one-line task label, or ``None`` if it is blank.
+
+    Whitespace is collapsed, so a task is always a single line whatever was pasted
+    into the box. A blank string means "no task", which is the same fact as the
+    field's absence -- so it is folded to ``None`` and persisted as ``null``. There
+    is exactly one way to say "I didn't write anything down", not two.
+
+    Raises:
+        CorruptJSONError: If ``raw`` is neither a string nor ``None``.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise CorruptJSONError(f"'task' must be a string or null, got {type(raw).__name__}")
+    return " ".join(raw.split()) or None
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +224,11 @@ class ActiveSession:
     only if the state is ``PAUSED``. Every state transition on this object is a
     method, so the invariant cannot be broken from the outside without going
     through validation.
+
+    ``task`` is what the session is being spent on, and is the one field that is
+    free text. It is optional throughout: a session that was never given one is
+    perfectly valid, which is what keeps every file written before the field
+    existed readable today.
     """
 
     id: str
@@ -191,6 +236,7 @@ class ActiveSession:
     state: SessionState = SessionState.RUNNING
     pause_start: datetime | None = None
     pauses: list[Pause] = field(default_factory=list)
+    task: str | None = None
 
     def __post_init__(self) -> None:
         is_paused = self.state is SessionState.PAUSED
@@ -198,15 +244,33 @@ class ActiveSession:
             raise CorruptJSONError("session is paused but 'pauseStart' is null")
         if not is_paused and self.pause_start is not None:
             raise CorruptJSONError("session is running but 'pauseStart' is set")
+        # Normalising here rather than at each construction site means every
+        # ActiveSession that exists -- however it was built -- already holds a
+        # clean label. There is no route into the object that skips this.
+        self.task = normalise_task(self.task)
 
     # -- construction -------------------------------------------------------
 
     @classmethod
-    def begin(cls, moment: datetime) -> "ActiveSession":
-        """Start a brand-new session at ``moment``."""
-        return cls(id=moment.strftime(_ID_FORMAT), start=moment, state=SessionState.RUNNING)
+    def begin(cls, moment: datetime, task: str | None = None) -> "ActiveSession":
+        """Start a brand-new session at ``moment``, optionally naming its task."""
+        return cls(
+            id=moment.strftime(_ID_FORMAT),
+            start=moment,
+            state=SessionState.RUNNING,
+            task=task,
+        )
 
     # -- transitions --------------------------------------------------------
+
+    def set_task(self, task: str | None) -> None:
+        """Record what the session is being spent on. ``None`` clears it.
+
+        Not a state transition -- a session's task can change (or arrive late)
+        without the clock noticing, which is precisely the point: you can write
+        down what you were doing at any time, including after the fact.
+        """
+        self.task = normalise_task(task)
 
     def pause(self, moment: datetime) -> None:
         """Move from ``RUNNING`` to ``PAUSED``.
@@ -265,6 +329,7 @@ class ActiveSession:
             "state": self.state.value,
             "id": self.id,
             "start": format_timestamp(self.start),
+            "task": self.task,
             "pauseStart": format_timestamp(self.pause_start) if self.pause_start else None,
             "pauses": [pause.to_dict() for pause in self.pauses],
         }
@@ -272,6 +337,9 @@ class ActiveSession:
     @classmethod
     def from_dict(cls, raw: Any) -> "ActiveSession":
         """Rebuild an :class:`ActiveSession` from ``current.json``.
+
+        ``task`` is read with ``get``, not required: a file written before the
+        field existed is not a corrupt file, it is a session nobody labelled.
 
         Raises:
             CorruptJSONError: If the document is malformed.
@@ -288,11 +356,12 @@ class ActiveSession:
         pause_start = parse_timestamp(pause_start_raw) if pause_start_raw is not None else None
 
         return cls(
-            id=_validate_id(_require_key(payload, "id", "current.json")),
+            id=validate_session_id(_require_key(payload, "id", "current.json")),
             start=parse_timestamp(_require_key(payload, "start", "current.json")),
             state=state,
             pause_start=pause_start,
             pauses=_pauses_from_list(payload.get("pauses", [])),
+            task=payload.get("task"),  # validated by __post_init__
         )
 
 
@@ -303,7 +372,12 @@ class ActiveSession:
 
 @dataclass(frozen=True)
 class CompletedSession:
-    """An archived session, persisted as one immutable file in ``sessions/``."""
+    """An archived session, persisted as one file in ``sessions/``.
+
+    Its *numbers* are immutable: no operation rewrites a timestamp or a duration,
+    and nothing may overwrite the file with a different day. Its ``task`` is the
+    single exception -- see :meth:`with_task`.
+    """
 
     id: str
     start: datetime
@@ -313,6 +387,13 @@ class CompletedSession:
     worked_seconds: int
     pauses: list[Pause] = field(default_factory=list)
     status: SessionStatus = SessionStatus.COMPLETED
+    task: str | None = None
+
+    def __post_init__(self) -> None:
+        # The class is frozen, so the normalised label has to be written past the
+        # freeze. The alternative -- normalising at each of the three construction
+        # sites -- is one rule stated three times, and three places for it to drift.
+        object.__setattr__(self, "task", normalise_task(self.task))
 
     @classmethod
     def from_active(cls, session: ActiveSession, end: datetime) -> "CompletedSession":
@@ -333,7 +414,22 @@ class CompletedSession:
             worked_seconds=max(0, gross - paused),
             pauses=list(session.pauses),
             status=SessionStatus.COMPLETED,
+            task=session.task,
         )
+
+    def with_task(self, task: str | None) -> "CompletedSession":
+        """Return a copy of this session carrying ``task``.
+
+        The one thing about a finished day that may still be written down after
+        the fact -- because forgetting to say what you were working on is not the
+        same as not having worked, and the alternative to letting you fix it is a
+        row of unlabelled days you can no longer identify.
+
+        It returns a *new* object rather than mutating this one: what it changes
+        is an annotation, and every number the session reports still comes from
+        the timestamps recorded when it happened.
+        """
+        return replace(self, task=task)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to the archived representation."""
@@ -342,6 +438,7 @@ class CompletedSession:
             "start": format_timestamp(self.start),
             "end": format_timestamp(self.end),
             "status": self.status.value,
+            "task": self.task,
             "grossSeconds": self.gross_seconds,
             "pausedSeconds": self.paused_seconds,
             "workedSeconds": self.worked_seconds,
@@ -371,7 +468,7 @@ class CompletedSession:
             return value
 
         return cls(
-            id=_validate_id(_require_key(payload, "id", "session")),
+            id=validate_session_id(_require_key(payload, "id", "session")),
             start=parse_timestamp(_require_key(payload, "start", "session")),
             end=parse_timestamp(_require_key(payload, "end", "session")),
             gross_seconds=_seconds("grossSeconds"),
@@ -379,4 +476,5 @@ class CompletedSession:
             worked_seconds=_seconds("workedSeconds"),
             pauses=_pauses_from_list(payload.get("pauses", [])),
             status=status,
+            task=payload.get("task"),  # validated by __post_init__
         )

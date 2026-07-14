@@ -20,7 +20,7 @@ from pathlib import Path
 from .models import ActiveSession, CompletedSession
 from .utils import CorruptJSONError, TrackerError, atomic_write_json, read_json
 
-__all__ = ["SessionExistsError", "Storage", "StorageError"]
+__all__ = ["NoSuchSessionError", "SessionExistsError", "Storage", "StorageError"]
 
 
 class StorageError(TrackerError):
@@ -29,6 +29,10 @@ class StorageError(TrackerError):
 
 class SessionExistsError(StorageError):
     """Raised when creating a file that must not already exist."""
+
+
+class NoSuchSessionError(StorageError):
+    """Raised when an operation names an archived session that does not exist."""
 
 
 class Storage:
@@ -143,6 +147,15 @@ class Storage:
 
     # -- sessions/ ----------------------------------------------------------
 
+    def has_session(self, session_id: str) -> bool:
+        """Whether an archive with this id exists.
+
+        ``session_id`` must already have been validated (see
+        :func:`tracker.models.validate_session_id`), like every id that is used
+        to build a path.
+        """
+        return self.session_path(session_id).is_file()
+
     def archive(self, session: CompletedSession) -> Path:
         """Write ``session`` into ``sessions/`` and return the path written.
 
@@ -157,6 +170,31 @@ class Storage:
         path = self.session_path(session.id)
         if path.exists():
             raise SessionExistsError(f"a session archive already exists at {path}")
+        try:
+            atomic_write_json(path, session.to_dict())
+        except OSError as exc:
+            raise StorageError(f"cannot write {path}: {exc}") from exc
+        return path
+
+    def update_session(self, session: CompletedSession) -> Path:
+        """Rewrite an archive that already exists, atomically.
+
+        This is the only way an archived session is ever rewritten, and it exists
+        for one reason: to let you write down what a day was spent on when you
+        forgot to say so at ``start``.
+
+        It **refuses to create** a file. :meth:`archive` therefore remains the
+        only thing in the system that can bring a session into existence, and a
+        mistyped id here can only ever fail -- it can never quietly mint a new,
+        half-empty day next to the real ones.
+
+        Raises:
+            NoSuchSessionError: If no archive with this id exists.
+            StorageError: If the file cannot be written.
+        """
+        path = self.session_path(session.id)
+        if not path.is_file():
+            raise NoSuchSessionError(f"no session archive at {path}")
         try:
             atomic_write_json(path, session.to_dict())
         except OSError as exc:

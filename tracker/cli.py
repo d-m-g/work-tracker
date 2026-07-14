@@ -12,7 +12,8 @@ Exit codes
     A :class:`~tracker.utils.TrackerError` -- a condition the tracker
     anticipates and reports (wrong state, corrupt file, unwritable directory).
 ``2``
-    Bad usage. Produced by :mod:`argparse` itself.
+    Bad usage -- an unknown command, or a contradictory one such as
+    ``task "docs" --clear``. Produced by :mod:`argparse` itself.
 """
 
 from __future__ import annotations
@@ -61,7 +62,8 @@ def default_root() -> Path:
 
 def _render_started(session: ActiveSession) -> str:
     """Render what ``start`` just did."""
-    return f"Started session {session.id} at {format_timestamp(session.start)}."
+    line = f"Started session {session.id} at {format_timestamp(session.start)}."
+    return f"{line}\nTask:    {session.task}" if session.task else line
 
 
 def _render_paused(session: ActiveSession) -> str:
@@ -97,16 +99,21 @@ def _render_status(status: Status) -> str:
     open_pause = " (one in progress)" if status.state is SessionState.PAUSED else ""
     assert status.start is not None  # guaranteed whenever a session is active
 
-    return "\n".join(
-        [
-            f"State:   {status.state}",
-            f"Session: {status.session_id}",
-            f"Started: {format_timestamp(status.start)}",
-            f"Worked:  {format_duration(status.worked_seconds)}",
-            f"Paused:  {format_duration(status.paused_seconds)}",
-            f"Pauses:  {status.pause_count}{open_pause}",
-        ]
-    )
+    lines = [
+        f"State:   {status.state}",
+        f"Session: {status.session_id}",
+        f"Started: {format_timestamp(status.start)}",
+    ]
+    # An unlabelled session prints no Task line at all, rather than an empty one:
+    # a blank field invites you to read it as "the task is nothing".
+    if status.task:
+        lines.append(f"Task:    {status.task}")
+    lines += [
+        f"Worked:  {format_duration(status.worked_seconds)}",
+        f"Paused:  {format_duration(status.paused_seconds)}",
+        f"Pauses:  {status.pause_count}{open_pause}",
+    ]
+    return "\n".join(lines)
 
 
 def _status_payload(status: Status) -> dict[str, object]:
@@ -115,6 +122,7 @@ def _status_payload(status: Status) -> dict[str, object]:
         "state": str(status.state) if status.state else "idle",
         "id": status.session_id,
         "start": format_timestamp(status.start) if status.start else None,
+        "task": status.task,
         "workedSeconds": status.worked_seconds,
         "pausedSeconds": status.paused_seconds,
         "pauses": status.pause_count,
@@ -127,7 +135,7 @@ def _status_payload(status: Status) -> dict[str, object]:
 
 
 def _cmd_start(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> int:
-    session = tracker.start()
+    session = tracker.start(args.task)
     if args.json:
         json.dump(session.to_dict(), out, indent=2)
         out.write("\n")
@@ -157,7 +165,7 @@ def _cmd_resume(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> 
 
 
 def _cmd_toggle(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> int:
-    result = tracker.toggle()
+    result = tracker.toggle(args.task)
     if args.json:
         # The action is what distinguishes this command's output from start's,
         # pause's or resume's, so it leads; the session document follows.
@@ -174,19 +182,17 @@ def _cmd_stop(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> in
         json.dump(completed.to_dict(), out, indent=2)
         out.write("\n")
     else:
-        print(
-            "\n".join(
-                [
-                    f"Stopped session {completed.id}.",
-                    f"Worked:  {format_duration(completed.worked_seconds)}",
-                    f"Paused:  {format_duration(completed.paused_seconds)}"
-                    f" across {len(completed.pauses)} pause(s)",
-                    f"Gross:   {format_duration(completed.gross_seconds)}",
-                    f"Saved:   {path}",
-                ]
-            ),
-            file=out,
-        )
+        lines = [f"Stopped session {completed.id}."]
+        if completed.task:
+            lines.append(f"Task:    {completed.task}")
+        lines += [
+            f"Worked:  {format_duration(completed.worked_seconds)}",
+            f"Paused:  {format_duration(completed.paused_seconds)}"
+            f" across {len(completed.pauses)} pause(s)",
+            f"Gross:   {format_duration(completed.gross_seconds)}",
+            f"Saved:   {path}",
+        ]
+        print("\n".join(lines), file=out)
     return EXIT_OK
 
 
@@ -200,6 +206,47 @@ def _cmd_status(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> 
     return EXIT_OK
 
 
+def _cmd_task(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> int:
+    """Read, set or clear what a session is being spent on.
+
+    One command in three moods, because they are one question asked three ways::
+
+        tracker.py task                            what am I working on?
+        tracker.py task "rewriting the parser"     this.
+        tracker.py task --clear                    never mind.
+
+    ``--session ID`` points any of the three at a day already archived, which is
+    how you label the one you forgot to label at the time.
+
+    A label and ``--clear`` ask for opposite things; the parser makes them
+    mutually exclusive, so that contradiction is refused as bad usage rather than
+    resolved by quietly discarding one of them.
+    """
+    setting = args.clear or args.text is not None
+    label = None if args.clear else args.text
+
+    if args.session is not None:
+        session = (
+            tracker.set_archived_task(args.session, label)
+            if setting
+            else tracker.archived(args.session)
+        )
+        task = session.task
+    elif setting:
+        task = tracker.set_task(label).task
+    else:
+        task = tracker.task()
+
+    if args.json:
+        json.dump({"task": task}, out, indent=2)
+        out.write("\n")
+    else:
+        # "Nothing written down" is a real answer and deserves saying out loud,
+        # rather than being printed as a blank line you are left to interpret.
+        print(task if task else "(no task recorded)", file=out)
+    return EXIT_OK
+
+
 #: Maps a subcommand name to its handler. Adding a command means adding a row
 #: here and a parser below -- no branching logic to touch.
 _COMMANDS: Final[dict[str, object]] = {
@@ -209,12 +256,51 @@ _COMMANDS: Final[dict[str, object]] = {
     "toggle": _cmd_toggle,
     "stop": _cmd_stop,
     "status": _cmd_status,
+    "task": _cmd_task,
 }
 
 
 # ---------------------------------------------------------------------------
 # parser
 # ---------------------------------------------------------------------------
+
+
+def _add_start_arguments(parser: argparse.ArgumentParser) -> None:
+    """``--task`` for ``start``, and for the ``toggle`` that turns out to start."""
+    parser.add_argument(
+        "--task",
+        default=None,
+        metavar="TEXT",
+        help="what you are working on (optional; can be set or changed later)",
+    )
+
+
+def _add_task_arguments(parser: argparse.ArgumentParser) -> None:
+    """The ``task`` command's three moods, and the session it points at."""
+    parser.add_argument(
+        "--session",
+        default=None,
+        metavar="ID",
+        help="act on an archived session instead of the one in progress",
+    )
+    # Mutually exclusive, so 'task "docs" --clear' is refused as bad usage (exit 2)
+    # rather than resolved by quietly throwing away one of the two.
+    mood = parser.add_mutually_exclusive_group()
+    mood.add_argument(
+        "text",
+        nargs="?",
+        default=None,
+        help="the task to record; omit to print the one already recorded",
+    )
+    mood.add_argument("--clear", action="store_true", help="remove the recorded task")
+
+
+#: Extra arguments, by subcommand. A command absent from here takes none.
+_ARGUMENTS: Final[dict[str, object]] = {
+    "start": _add_start_arguments,
+    "toggle": _add_start_arguments,
+    "task": _add_task_arguments,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -244,9 +330,13 @@ def build_parser() -> argparse.ArgumentParser:
         "toggle": "start, pause or resume, whichever the current state calls for",
         "stop": "end the session and archive it under sessions/",
         "status": "show the current state, worked time, paused time and pause count",
+        "task": "show, set or clear what a session is being spent on",
     }
     for name, help_text in descriptions.items():
-        subparsers.add_parser(name, help=help_text, description=help_text)
+        subparser = subparsers.add_parser(name, help=help_text, description=help_text)
+        add_arguments = _ARGUMENTS.get(name)
+        if add_arguments is not None:
+            add_arguments(subparser)  # type: ignore[operator]
 
     return parser
 

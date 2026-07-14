@@ -8,7 +8,7 @@ from datetime import timedelta
 from support import EPOCH, TrackerTestCase
 
 from tracker.models import ActiveSession, CompletedSession
-from tracker.storage import SessionExistsError
+from tracker.storage import NoSuchSessionError, SessionExistsError
 from tracker.utils import CorruptJSONError, read_json
 
 
@@ -62,6 +62,7 @@ class TestCurrentFile(TrackerTestCase):
                 "state": "running",
                 "id": "2026-07-14_19-42-18",
                 "start": "2026-07-14T19:42:18+03:00",
+                "task": None,
                 "pauseStart": None,
                 "pauses": [],
             },
@@ -95,6 +96,20 @@ class TestSessionArchive(TrackerTestCase):
         completed = self._completed()
         path = self.storage.archive(completed)
         self.assertEqual(completed, self.storage.load_session(path))
+
+    def test_update_session_rewrites_a_record_that_exists(self) -> None:
+        completed = self._completed()
+        path = self.storage.archive(completed)
+
+        self.storage.update_session(completed.with_task("written down late"))
+        self.assertEqual("written down late", self.storage.load_session(path).task)
+
+    def test_update_session_refuses_to_create_a_record(self) -> None:
+        # `archive` stays the only thing that can bring a session into existence,
+        # so a mistyped id here can only ever fail -- never quietly mint a new day.
+        with self.assertRaises(NoSuchSessionError):
+            self.storage.update_session(self._completed())
+        self.assertEqual([], self.storage.list_sessions())
 
     def test_list_sessions_is_empty_before_anything_is_archived(self) -> None:
         self.assertEqual([], self.storage.list_sessions())

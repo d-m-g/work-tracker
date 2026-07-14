@@ -41,6 +41,7 @@ def build_status_payload(storage: Storage, clock: Clock = now) -> Dict[str, Any]
             "state": "idle",
             "id": None,
             "start": None,
+            "task": None,
             "grossSeconds": 0,
             "workedSeconds": 0,
             "pausedSeconds": 0,
@@ -57,6 +58,7 @@ def build_status_payload(storage: Storage, clock: Clock = now) -> Dict[str, Any]
         "state": str(status.state),
         "id": status.session_id,
         "start": format_timestamp(status.start) if status.start else None,
+        "task": status.task,
         # gross = worked + paused, so the UI can derive the session's current
         # end as start + gross. That keeps the timeline anchored to the server's
         # clock instead of the browser's, which may be seconds adrift.
