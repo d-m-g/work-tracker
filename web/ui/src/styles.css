@@ -32,6 +32,14 @@
   --strip-h: 12px;
   --radius: 3px;
 
+  /* The hero card is the one surface lifted off the paper — a whisper of a
+     shadow, not a drop-shadow, so it reads as raised card stock rather than a
+     floating panel. Everything else stays flat on the page. */
+  --lift: 0 1px 2px rgba(20, 25, 35, 0.04), 0 14px 34px -20px rgba(20, 25, 35, 0.32);
+  /* The tint a history row wears under the pointer, so a clickable row looks
+     clickable before you find the cursor. Cut from the work hue, kept faint. */
+  --row-hover: rgba(47, 85, 151, 0.05);
+
   /* An instrument panel: geometric caps for labels, mono for every number. */
   --face-label: 'Avenir Next', 'Futura', ui-sans-serif, system-ui, sans-serif;
   --face-data: ui-monospace, 'SF Mono', Menlo, monospace;
@@ -53,6 +61,11 @@
 
     --fault: #f08d81;
     --fault-bg: #33201d;
+
+    /* Darker rooms show a shadow less and a light edge more; the lift deepens
+       and the hover tint borrows the brighter dark-mode work hue. */
+    --lift: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 38px -20px rgba(0, 0, 0, 0.6);
+    --row-hover: rgba(79, 130, 214, 0.09);
   }
 }
 
@@ -118,6 +131,7 @@ code {
   background: var(--card);
   border: 1px solid var(--rule);
   border-radius: 10px;
+  box-shadow: var(--lift);
   padding: 1.75rem 1.75rem 1.5rem;
   margin-bottom: 3.5rem;
 }
@@ -258,6 +272,7 @@ code {
 .start__task {
   flex: 1;
   min-width: 0;
+  min-height: 44px; /* level with the Start button beside it */
   padding: 0.5rem 0.7rem;
   background: var(--paper);
   border: 1px solid var(--rule);
@@ -278,7 +293,14 @@ code {
 
 .btn {
   flex: none;
-  padding: 0.55rem 1.1rem;
+  /* A comfortable hit area: this tracker is driven from a phone over the tailnet
+     as much as from the desk, and 44px is the floor a thumb can land on without
+     aiming. On the desktop it just reads as a button with its feet under it. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0.55rem 1.2rem;
   border: 1px solid transparent;
   border-radius: 6px;
   font-family: var(--face-label);
@@ -462,14 +484,24 @@ code {
   align-items: center;
   gap: 0;
   width: 100%;
+  min-height: 44px; /* a whole row is the tap target; give the thumb its 44px */
+  /* Geometry unchanged on purpose: the columns must stay pinned under the shared
+     ruler (see .history__ruler), so the hover tint is added without touching any
+     padding or margin that would drift the strip off the hours. */
   padding: 0.85rem 0;
   padding-right: 0.5rem;
   background: none;
   border: 0;
+  border-radius: 6px;
   text-align: left;
   color: inherit;
   font: inherit;
   cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.day__row:hover {
+  background: var(--row-hover);
 }
 
 .day__row:hover .day__date {
@@ -687,5 +719,11 @@ code {
   }
   .start__task {
     flex-basis: 100%;
+  }
+
+  /* The engraved edit-line stays a hairline on the desktop, but a thumb needs
+     something to land on: on a phone it gets a real height, still chrome-free. */
+  .task__input {
+    min-height: 44px;
   }
 }
