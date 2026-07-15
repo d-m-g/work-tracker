@@ -372,6 +372,7 @@ from this Mac and nowhere else — your working hours are nobody else's business
 | `--port N` | Listen on a different port (default `8765`). |
 | `--root DIR` | Read sessions from a different data directory. |
 | `--host H` | Bind address. Leave it alone unless you *want* the network to see it. |
+| `--allow-origin HOST` | Also accept writes from this host, so another device can drive the tracker. Repeatable. This machine is always allowed. See [Driving it from your phone](#driving-it-from-your-phone). |
 
 If you run the server before building the UI, it says so on the page rather than
 404-ing at you. The API works either way.
@@ -388,6 +389,69 @@ the browser still reports the origin as `evil.example`, and that is what is chec
 Reads are left alone — binding to loopback already handles those — and `--host`
 anything other than loopback now prints a warning, because it means anyone who can
 reach the port can control your sessions.
+
+### Driving it from your phone
+
+Both of those locks are *yours to open*, deliberately and one device at a time. To
+control the tracker from a phone you widen exactly two things, and out of the box
+you have widened neither:
+
+* `--host` — so the server listens somewhere the phone can actually reach, instead
+  of loopback;
+* `--allow-origin HOST` — so a write carrying that device's `Origin` passes the
+  check above instead of being refused as foreign.
+
+Pass neither and nothing changes: loopback only, this-machine-only writes, exactly
+as described above. The flag *adds* to the allowed set and never replaces it, so
+loopback keeps working no matter what else you let in, and only the host you name
+gets through — not the network at large.
+
+The recommended `HOST` is a **private** address that only your own devices can
+reach, so "widen" stays "my devices" rather than becoming "anyone on the wifi".
+[Tailscale](https://tailscale.com) is the clean way to get one: it puts your Mac
+and phone on a private, encrypted network of *just your devices*, each with a
+stable address, working on cellular as well as at home — no port forwarding and
+nothing exposed to the public internet. With it running on both:
+
+```sh
+# 127.0.0.1 is your Mac's Tailscale address (tailscale ip -4)
+python3 web/server.py --host 100.64.0.1 --allow-origin http://100.64.0.1:8765
+```
+
+Then open `http://100.64.0.1:8765` on the phone — a live clock and working
+buttons. The same two flags work for a plain same-wifi LAN address instead; it is
+simply a less private one, and the server says as much on startup. `--allow-origin`
+takes a bare host or a full origin, and ignores the port either way — what a write
+is allowed by is where it came from, not which port it came in on.
+
+Binding to the Tailscale address *specifically* — rather than `0.0.0.0` — is the
+stronger choice: the server then listens on the tailnet interface alone, so it is
+not on your wifi at all. Only your own Tailscale devices can reach the port, and
+the origin check narrows that to the one you named.
+
+#### One command for both — `web/serve-all.sh`
+
+Running the local viewer and the tailnet viewer as two commands is a chore, and
+hard-coding the Tailscale address means editing the command every time it changes.
+The launcher does both for you:
+
+```sh
+web/serve-all.sh
+```
+
+It starts the loopback viewer **always**, and additionally starts a viewer on this
+Mac's current Tailscale address **only when Tailscale is connected** — asking
+`tailscale ip` at launch, so nothing is hard-coded. If Tailscale is off, logged
+out, or not installed, the local viewer comes up exactly as before and the tailnet
+one is skipped with a one-line note: a missing tailnet is never an error. `Ctrl-C`
+stops both. It honours `PORT`, `ROOT`, `PYTHON` and `TAILSCALE` from the
+environment if you need to override any of them; otherwise it needs no arguments.
+
+This is a *caller* being let in from one more place, not a new writer: every button
+is still the single call into the one `WorkTracker` that the CLI, the Shortcuts and
+the widget all drive. Nothing about the JSON, the atomic writes or the "one writer"
+guarantee changes; the phone is another caller of it, exactly as the local browser
+is.
 
 ### What it shows, and what it lets you do
 
@@ -616,9 +680,10 @@ work-tracker/
     web/
         api.py            builds the JSON payloads, runs the commands (no HTTP)
         server.py         stdlib http.server: the API + the built UI
+        serve-all.sh      launches the viewer on loopback + Tailscale in one command
         ui/               the React app (Vite); the only npm in the project
     widget/               the always-on-top mini player (Swift; optional)
-    tests/                180 unit tests
+    tests/                195 unit tests
     README.md
 ```
 
@@ -677,11 +742,13 @@ discard the first session.
 python3 -m unittest discover -s tests -t tests -v
 ```
 
-180 tests, no dependencies, no network, no sleeping. They cover the duration
+195 tests, no dependencies, no network, no sleeping. They cover the duration
 arithmetic, every state transition and every illegal one, JSON round-trips,
 corrupt-file handling, the atomicity guarantees, the CLI's exit codes, the web
-API's payloads, every web command and every refusal, and the rules around the task
-label — including that an id naming an archive can never escape `sessions/`.
+API's payloads, every web command and every refusal, which origins may write (and
+that widening the set never lets loopback slip or the network in), and the rules
+around the task label — including that an id naming an archive can never escape
+`sessions/`.
 
 The suite passes on both `/usr/bin/python3` (3.9) and current Python (3.14).
 

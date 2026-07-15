@@ -35,6 +35,17 @@ resolves to 127.0.0.1 but its origin still says ``evil.example``. Reads are left
 alone: there is nothing to protect against there that binding to loopback has not
 already handled.
 
+**Driving it from another device is opt-in, and off by default.** To control the
+tracker from a phone you widen both locks yourself, on purpose: ``--host`` to
+listen somewhere the device can reach, and ``--allow-origin HOST`` to let that
+device's origin through the guard above. Pass neither and nothing changes -- the
+server listens on loopback and accepts writes from this machine alone, exactly as
+before. The recommended ``HOST`` is a private one only your own devices can
+reach (a Tailscale address, say), so "widen" stays "my devices" and does not
+become "the network". The flag is host-only and deliberately port-blind, like the
+loopback origins it joins: what a write is allowed by is where it came from, never
+which port it came in on.
+
 **No build, no problem.** If ``web/ui/dist`` is missing, the server still starts
 and serves a page explaining how to build the UI, instead of returning a bare
 404 that leaves you guessing.
@@ -74,12 +85,43 @@ from web.api import (  # noqa: E402
 #: Where `npm run build` puts the compiled React app.
 DIST_DIR = _REPO_ROOT / "web" / "ui" / "dist"
 
-#: Hostnames a write may legitimately originate from. Any port: in development
-#: the Vite server on :5173 proxies /api through to us and forwards the browser's
-#: own Origin, so pinning the port would break `npm run dev` while protecting
-#: against nothing -- what matters is the host, and a hostile page's origin is
-#: never one of these, however its name resolves.
+#: Hostnames a write may *always* originate from -- this machine, under each of
+#: the names it answers to. Any port: in development the Vite server on :5173
+#: proxies /api through to us and forwards the browser's own Origin, so pinning
+#: the port would break `npm run dev` while protecting against nothing -- what
+#: matters is the host, and a hostile page's origin is never one of these, however
+#: its name resolves. `--allow-origin` adds to this set; it never replaces it, so
+#: loopback keeps working no matter what else is let in.
 _LOCAL_ORIGINS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _host_of(value: str) -> str:
+    """Reduce an origin or a bare host to the hostname the guard compares on.
+
+    It accepts both what a browser stamps on a request (``http://100.64.0.1:8765``)
+    and the shorthand a person types on the command line (``100.64.0.1``, or a
+    name like ``mymac.tail-scale.ts.net``), so ``--allow-origin`` takes either
+    without the caller having to know which. The scheme and the port are dropped:
+    a write is allowed by the host it came from, never the port it arrived on --
+    the same rule the loopback origins have always followed.
+    """
+    host = urlparse(value).hostname or urlparse("//" + value).hostname
+    return (host or value).strip().lower()
+
+
+def _origin_allowed(origin: Optional[str], allowed: frozenset) -> bool:
+    """Decide whether a write carrying ``origin`` may proceed.
+
+    A request with no ``Origin`` at all did not come from a page -- it came from
+    ``curl``, or a script, or the test suite, none of which a browser's
+    same-origin machinery constrains and all of which could equally run the CLI.
+    So a missing header is allowed; a *present* one must name an allowed host.
+    Kept a free function, with no ``self`` and no socket, so the one security
+    decision in the server is asserted directly in the tests.
+    """
+    if origin is None:
+        return True
+    return urlparse(origin).hostname in allowed
 
 #: A command body is a handful of bytes. Anything larger is not one, and is not
 #: worth reading into memory to find that out.
@@ -167,9 +209,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
     server_version = "work-tracker"
     sys_version = ""
 
-    def __init__(self, *args: Any, storage: Storage, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        storage: Storage,
+        allowed_origins: frozenset = _LOCAL_ORIGINS,
+        **kwargs: Any,
+    ) -> None:
         # Bound before super().__init__, which handles the request immediately.
         self._storage = storage
+        self._allowed_origins = allowed_origins
         super().__init__(*args, **kwargs)
 
     # -- routing ------------------------------------------------------------
@@ -204,7 +253,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            self._require_local_origin()
+            self._require_allowed_origin()
             body = self._read_body()
         except BadRequest as refusal:
             self._send_json(refusal.status, {"error": refusal.message})
@@ -221,23 +270,21 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     # -- guards -------------------------------------------------------------
 
-    def _require_local_origin(self) -> None:
-        """Refuse a write that a foreign page asked for.
+    def _require_allowed_origin(self) -> None:
+        """Refuse a write from an origin that was not let in.
 
-        A browser attaches ``Origin`` to every POST it makes, so a request without
-        one did not come from a page at all -- it came from ``curl``, or a script,
-        or the test suite, all of which could equally well have run the CLI. What
-        the header cannot do is lie: a page served from ``evil.example`` cannot
-        make its browser claim to be ``127.0.0.1``, whatever that name resolves
-        to. Checking it is therefore enough, and checking it is cheap.
+        A browser attaches ``Origin`` to every POST it makes, and what the header
+        cannot do is lie: a page served from ``evil.example`` cannot make its
+        browser claim to be one of the allowed hosts, whatever that name resolves
+        to. Checking it is therefore enough, and checking it is cheap. The allowed
+        set is this machine by default, plus whatever ``--allow-origin`` added --
+        so the refusal here is exactly as wide, or as narrow, as you asked for.
 
         Raises:
-            BadRequest: If an ``Origin`` is present and is not this machine.
+            BadRequest: If an ``Origin`` is present and is not an allowed host.
         """
         origin = self.headers.get("Origin")
-        if origin is None:
-            return
-        if urlparse(origin).hostname not in _LOCAL_ORIGINS:
+        if not _origin_allowed(origin, self._allowed_origins):
             raise BadRequest(
                 HTTPStatus.FORBIDDEN,
                 f"refusing a write from another origin ({origin})",
@@ -390,10 +437,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
         sys.stderr.write("  %s\n" % (format % args))
 
 
-def serve(root: Path, host: str, port: int) -> int:
-    """Run the server until interrupted. Returns a process exit code."""
+def serve(root: Path, host: str, port: int, allow_origins: frozenset = frozenset()) -> int:
+    """Run the server until interrupted. Returns a process exit code.
+
+    ``allow_origins`` is the *extra* hosts a write may come from, on top of this
+    machine. Empty by default, which is the shipped behaviour: writes from
+    anywhere but loopback are refused.
+    """
     storage = Storage(root)
-    handler = partial(ViewerHandler, storage=storage)
+    allowed = _LOCAL_ORIGINS | allow_origins
+    handler = partial(ViewerHandler, storage=storage, allowed_origins=allowed)
 
     try:
         httpd = ThreadingHTTPServer((host, port), handler)
@@ -403,10 +456,18 @@ def serve(root: Path, host: str, port: int) -> int:
 
     print(f"work-tracker viewer -> http://{host}:{port}")
     print(f"data directory      -> {root}")
+    if allow_origins:
+        print(f"writes allowed from -> {', '.join(sorted(allow_origins))} (and this machine)")
     if host not in _LOCAL_ORIGINS:
         # The server can start and stop sessions now, so a bind address that is
         # not loopback is worth saying out loud rather than leaving to be noticed.
-        print(f"warning: {host} is not loopback -- anyone who can reach this port can control your sessions")
+        print(f"warning: {host} is not loopback -- anyone who can reach this port and pass the")
+        print("         origin check can control your sessions; keep this on a trusted network")
+    elif allow_origins:
+        # Allowing a remote origin while still bound to loopback is a half-turned
+        # key: the guard would let the device through, but it can never reach the
+        # port. Say so, rather than let it look like it should work.
+        print("note: still listening on loopback -- pass --host so another device can reach it")
     if not DIST_DIR.is_dir():
         print(f"note: the UI is not built yet (run 'npm install && npm run build' in {DIST_DIR.parent})")
     print("press ctrl-c to stop")
@@ -435,9 +496,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="bind address (default: 127.0.0.1, i.e. this machine only)",
     )
     parser.add_argument("--port", type=int, default=8765, help="port (default: 8765)")
+    parser.add_argument(
+        "--allow-origin",
+        action="append",
+        default=[],
+        metavar="HOST",
+        dest="allow_origin",
+        help=(
+            "also accept writes whose Origin is this host -- repeatable. Needed to "
+            "drive the tracker from another device: pass the address you will open "
+            "it at (e.g. --allow-origin 100.64.0.1). A host or a full origin both "
+            "work; the port is ignored. This machine is always allowed."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    return serve(root=args.root.expanduser(), host=args.host, port=args.port)
+    allow_origins = frozenset(_host_of(origin) for origin in args.allow_origin)
+    return serve(
+        root=args.root.expanduser(),
+        host=args.host,
+        port=args.port,
+        allow_origins=allow_origins,
+    )
 
 
 if __name__ == "__main__":
