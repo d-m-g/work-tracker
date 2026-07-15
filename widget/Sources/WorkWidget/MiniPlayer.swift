@@ -58,12 +58,26 @@ struct MiniPlayer: View {
         }
         .padding(.horizontal, 14)
         .frame(width: MiniPlayer.size.width, height: MiniPlayer.size.height)
-        .background(Frost())
+        .background(
+            // The frost alone lets a white desktop bleed through and wash the
+            // readout out -- worst in dark mode, where near-white numerals end up
+            // on a frost the white behind them has lifted almost to their own
+            // colour. The surface, laid over the frost, gives the pill a face of
+            // its own so the contrast is the palette's regardless of what is
+            // behind it; a sliver of translucency is left so it still reads as
+            // desktop furniture and not a card dropped on top.
+            ZStack {
+                Frost()
+                Palette.surface.opacity(0.8)
+            }
+        )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            // A hairline, so the pill still has an edge against a pale desktop.
+            // A hairline, so the pill still has an edge against a pale desktop --
+            // firmer than before, because rule on white is faint and the drop
+            // shadow does little over a bright background.
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Palette.rule.opacity(0.55), lineWidth: 1)
+                .strokeBorder(Palette.rule.opacity(0.8), lineWidth: 1)
         )
         .onAppear {
             guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }

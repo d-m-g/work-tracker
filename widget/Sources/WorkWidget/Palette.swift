@@ -31,6 +31,13 @@ enum Palette {
     /// Hairlines and button chrome.
     static let rule = dynamic(light: 0xD6DAE1, dark: 0x2A2E36)
 
+    /// The panel's own face -- the web viewer's `--card`. The frost behind the
+    /// pill samples whatever the desktop is showing, which over a white document
+    /// is white; laid over the frost at near-opacity, this gives the readout a
+    /// surface of its own, so its contrast holds instead of washing out when the
+    /// pill floats over a pale background.
+    static let surface = dynamic(light: 0xFFFFFF, dark: 0x1A1D23)
+
     /// The warm one. The live edge, and nothing else.
     static let live = dynamic(light: 0xB26A00, dark: 0xC0801F)
 
