@@ -17,20 +17,31 @@
     <title>Work Tracker</title>
 
     <!-- The author's mark, shared with ../portfolio, in three cuts because one is
-         not enough. The portfolio carries this as a lone inline SVG, and an SVG
+         not enough. The portfolio carries it as a lone inline SVG, and an SVG
          favicon is a thing Safari has never supported at any version -- so there
-         it quietly renders as nothing, and here it did too. The PNGs are what
-         Safari actually paints; the SVG is kept first for the browsers that do
-         support it, being the one cut that stays crisp at any size.
+         it quietly renders as nothing, and here it did too.
 
-         `apple-touch-icon` is separate and not optional: iOS reads *only* this for
-         a Home Screen tile -- never `rel=icon` -- and will not take a data: URI
-         for it. Its absence is why the tile came out blank. It is full-bleed and
+         favicon.ico comes first and is the one that does the work. It holds the
+         16, 32 and 48 rasters in one file at the path every browser has probed
+         since 1999 -- and, crucially, probes *without reading this document*.
+         That is the case the link tags below cannot serve: an icon fetched out of
+         band, by a sidebar or a tab strip that never parsed the head, finds
+         nothing unless something is sitting at /favicon.ico. Something is now.
+
+         icon.svg is kept for the browsers that support it, being the one cut that
+         stays crisp at any size. Between the two, every browser has a cut it can
+         paint, and neither is asked to guess.
+
+         apple-touch-icon is separate and not optional: iOS reads *only* this for
+         a Home Screen tile -- never rel=icon -- and will not take a data: URI for
+         it. Its absence is why the tile came out blank. It is full-bleed and
          square on purpose: iOS masks its own squircle, and pre-rounded corners
-         would be rounded twice. See public/icon.svg for the source. -->
+         would be rounded twice.
+
+         public/icon.svg is the source all of these are cut from; its comment says
+         how. -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
-    <link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="Work Tracker" />
     <!-- Zodiak carries every word on the page, so fetch it with the stylesheet

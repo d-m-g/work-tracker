@@ -587,11 +587,18 @@ html::before {
 }
 
 /* The ruler must sit exactly over the strip column: the date + worked columns to
-   its left (11 + 5rem), and the breaks column plus the strip's own gutter to its
-   right (5.5 + 1rem). If these drift, the hours stop lining up with the ink. */
+   its left (11 + 5rem), and the breaks column, the strip's own gutter and the
+   row's right pad to its right (5.5 + 1 + 0.5rem). If these drift, the hours stop
+   lining up with the ink.
+
+   They had drifted. The 0.5rem was not in this sum, so the ruler ran 8px wider
+   than the strip it measures -- the ticks and the ink agreeing at 00:00 and
+   sliding apart the further right you read, which on an axis whose whole argument
+   is that a late start *looks* late is the one error that matters. Measured, not
+   spotted: the strip was 384px under a 392px ruler, and is now 384 under 384. */
 .history__ruler {
   padding-left: 16rem;
-  padding-right: 6.5rem;
+  padding-right: 7rem;
 }
 
 .days {
@@ -609,13 +616,23 @@ html::before {
   grid-template-columns: 11rem 5rem 1fr 5.5rem;
   align-items: center;
   gap: 0;
-  width: 100%;
   min-height: 44px; /* a whole row is the tap target; give the thumb its 44px */
-  /* Geometry unchanged on purpose: the columns must stay pinned under the shared
-     ruler (see .history__ruler), so the hover tint is added without touching any
-     padding or margin that would drift the strip off the hours. */
-  padding: 0.85rem 0;
-  padding-right: 0.5rem;
+  /* The tint needs to stand off the text, and the columns must not move: they are
+     pinned under a ruler drawn once for the whole table (.history__ruler), and a
+     row that pads itself inward drags its strip off the hours it is measured
+     against.
+
+     So the row grows *outward* by exactly what it pads inward. The width gains
+     the two gutters, the margins pull them back off, and the content box lands
+     precisely where it did with no padding at all -- same left edge, same width,
+     same strip under the same tick. What changes is only how far the background
+     reaches: 0.7rem past the text on each side, into the page's own gutter, so
+     the tint reads as a band the row sits in rather than a box drawn tight around
+     the words. The right pad carries the 0.5rem the last column always had. */
+  width: calc(100% + 1.4rem);
+  margin-inline: -0.7rem;
+  padding: 0.85rem 0.7rem;
+  padding-right: 1.2rem;
   background: none;
   border: 0;
   border-radius: 6px;
@@ -626,14 +643,30 @@ html::before {
   transition: background-color 0.12s ease;
 }
 
-.day__row:hover {
+/* An open row wears the tint on every device, because there it *means* something:
+   this is the day you opened. */
+.day__row[aria-expanded='true'] {
   background: var(--row-hover);
 }
 
-.day__row:hover .day__date {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  text-decoration-color: var(--work);
+/* Hover, only where there is something to hover with.
+ *
+ * A finger has no hover, but iOS fakes one anyway: tap a row and the :hover state
+ * sticks to it until you tap somewhere else. So on a phone this tint stopped
+ * being a pointer following the page and became a pink block sitting on a row you
+ * had already finished with -- a selection nobody selected, and one you could not
+ * clear by looking away. `hover: hover` asks the question properly: the tint is
+ * for a pointer, and only a pointer gets it. */
+@media (hover: hover) {
+  .day__row:hover {
+    background: var(--row-hover);
+  }
+
+  .day__row:hover .day__date {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--work);
+  }
 }
 
 .day__date {
@@ -1007,7 +1040,10 @@ html::before {
   .day__row {
     grid-template-columns: 1fr auto;
     gap: 0.35rem 1rem;
-    padding: 1rem 0;
+    /* The same two gutters the wide row pads by, so the width and margins it
+       inherits still cancel exactly. There is no 0.5rem to carry here: the narrow
+       row's last column is the full-width strip, which wants the whole measure. */
+    padding: 1rem 0.7rem;
   }
 
   .day__date {

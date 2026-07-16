@@ -311,12 +311,12 @@ _LOGIN_PAGE = """<!doctype html>
 <!-- The same icons the app carries, and for the same reasons -- see
      web/ui/index.html, where they are explained at length. They matter here in
      particular: this is the page a signed-out phone bookmarks, so this is the
-     head an iPhone reads when it goes looking for a Home Screen tile. All four
-     files come out of the build, and web.public_path lets an anonymous browser
-     have every one of them. -->
+     head an iPhone reads when it goes looking for a Home Screen tile. Every file
+     comes out of the build, and web.public_path lets an anonymous browser have
+     each one -- which /favicon.ico especially needs, since whatever fetches it
+     may never have read this page or held a cookie. -->
+<link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
-<link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="Work Tracker">
 <style>
