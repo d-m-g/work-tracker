@@ -16,7 +16,7 @@ import TaskField from './TaskField.jsx'
  * the kind you might want to name, and a row you cannot open is a row you cannot
  * correct.
  */
-function Day({ day, axis, index, send }) {
+function Day({ day, axis, index, send, readOnly }) {
   const [open, setOpen] = useState(false)
 
   // Latest first, the way the days themselves are stacked. `daysOf` hands these
@@ -90,6 +90,7 @@ function Day({ day, axis, index, send }) {
                   onCommit={(task) => send('task', { id: part.id, task })}
                   placeholder="What was this spent on?"
                   id={`task-${part.id}`}
+                  readOnly={readOnly}
                 />
               </li>
             ))}
@@ -139,7 +140,7 @@ function describe(day) {
   }, ${day.breaks} ${day.breaks === 1 ? 'break' : 'breaks'}.`
 }
 
-export default function History({ days, totals, unreadable, axis, send }) {
+export default function History({ days, totals, unreadable, axis, send, readOnly = false }) {
   if (!days) return null
 
   return (
@@ -179,7 +180,14 @@ export default function History({ days, totals, unreadable, axis, send }) {
           </div>
           <ul className="days">
             {days.map((day, index) => (
-              <Day key={day.id} day={day} axis={axis} index={index} send={send} />
+              <Day
+                key={day.id}
+                day={day}
+                axis={axis}
+                index={index}
+                send={send}
+                readOnly={readOnly}
+              />
             ))}
           </ul>
         </>

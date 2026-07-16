@@ -26,7 +26,7 @@ function Clock({ seconds, held }) {
   )
 }
 
-export default function LiveSession({ status, axis, busy, send }) {
+export default function LiveSession({ status, axis, busy, send, readOnly = false }) {
   if (!status) {
     return (
       <section className="live">
@@ -42,7 +42,10 @@ export default function LiveSession({ status, axis, busy, send }) {
         <p className="eyebrow">Today</p>
         <Clock seconds={0} held />
         <p className="live__caption">Nothing running.</p>
-        <StartForm busy={busy} send={send} />
+        {/* A read-only account is not offered the box, because starting a session
+            is not theirs to do. An idle tracker is still worth showing them: that
+            nothing is running is an answer to the question they came with. */}
+        {!readOnly && <StartForm busy={busy} send={send} />}
       </section>
     )
   }
@@ -74,9 +77,10 @@ export default function LiveSession({ status, axis, busy, send }) {
         onCommit={(task) => send('task', { task })}
         placeholder="What are you working on?"
         id="live-task"
+        readOnly={readOnly}
       />
 
-      <Controls status={status} busy={busy} send={send} />
+      {!readOnly && <Controls status={status} busy={busy} send={send} />}
 
       <div className="live__timeline">
         <Ruler axis={axis} />

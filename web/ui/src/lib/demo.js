@@ -181,15 +181,25 @@ function seed() {
 // ---------------------------------------------------------------------------
 
 /**
- * There is no session to sign out of.
+ * There is no session to sign out of, and nothing here is withheld.
  *
- * The server staples this onto every status it sends (see `_serve_json`), so the
- * demo owes an answer to the same question, and the honest answer is no: nobody
- * signed in to see a fortnight that never happened. It is what keeps the Sign out
- * button off this page — the way back to the login form is the banner's, and it is
- * a link, because there is no session here to end.
+ * The server staples both of these onto every status it sends (see `_serve_json`),
+ * so the demo owes an answer to the same two questions.
+ *
+ * `login: false` is the honest one: nobody signed in to see a fortnight that never
+ * happened. It is what keeps the Sign out button off this page — the way back to
+ * the login form is the banner's, and it is a link, because there is no session
+ * here to end.
+ *
+ * `role: 'owner'` is the honest one too, though it reads oddly next to it. The
+ * demo's whole argument is the instrument working, so every button has to be
+ * there and has to do what it says — and the account that has every button is the
+ * owner. There is nothing to protect: the fortnight is invented, this page never
+ * calls the server, and pressing Stop here ends a session that does not exist.
+ * The demo cannot escalate to anything, because there is nothing on the other
+ * side of it to escalate to.
  */
-const NO_LOGIN = { login: false }
+const NO_LOGIN = { login: false, role: 'owner' }
 
 const IDLE = {
   state: 'idle',

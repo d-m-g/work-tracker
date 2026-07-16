@@ -1,11 +1,11 @@
-"""Tests for the server's two security decisions: who may write, and who may look.
+"""Tests for the server's security decisions: who may write, and who may look.
 
-Like the rest of the suite, these bind no port. Both guards live in free functions
--- :func:`web.server._host_of`, :func:`web.server._origin_allowed` and
-:func:`web.server.public_path` -- precisely so they can be asserted directly,
-without an HTTP round-trip. What the socket wrapper adds on top (reading a header,
-turning a ``False`` into a 403, a ``None`` into the login form) is a two-line
-adapter over the decisions proved here.
+Like the rest of the suite, these bind no port. Every guard lives in a free
+function -- :func:`web.server._host_of`, :func:`web.server._origin_allowed`,
+:func:`web.server.public_path`, :func:`web.auth.may_write` -- precisely so they
+can be asserted directly, without an HTTP round-trip. What the socket wrapper adds
+on top (reading a header, turning a ``False`` into a 403, a ``None`` into the login
+form) is a two-line adapter over the decisions proved here.
 
 The through-lines:
 
@@ -17,13 +17,33 @@ The through-lines:
   and it is published in this repository anyway -- and may never have a minute off
   your disk. :func:`~web.server.public_path` is where that line is drawn, so this
   is where it is defended.
+* A visitor *with* the read-only password may have every minute of it and change
+  none of them. The refusal is the server's, not the app's, so what is asserted
+  here is the form the server hands that account -- see also
+  :class:`tests.test_auth.TestMayWrite`, where the rule itself is proved.
 """
 
 from __future__ import annotations
 
+import json
 import unittest
+from contextlib import redirect_stderr
+from io import BytesIO, StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any, Dict, Optional, Tuple
 
-from web.server import _LOCAL_ORIGINS, _host_of, _origin_allowed, public_path
+from tracker.storage import Storage
+from web.auth import COOKIE_NAME, OWNER, VIEWER, Authenticator, hash_password
+from web.server import (
+    _LOCAL_ORIGINS,
+    ViewerHandler,
+    _host_of,
+    _login_page,
+    _origin_allowed,
+    _picker,
+    public_path,
+)
 
 
 class TestHostOf(unittest.TestCase):
@@ -155,6 +175,279 @@ class TestPublicPathServesNothingElse(unittest.TestCase):
         # Not a security boundary -- it is the same code either way -- but the
         # demo does not need it, and the set is what the demo needs.
         self.assertIsNone(public_path("/assets/index-abc123.js.map"))
+
+
+class _Connection:
+    """A socket that is not one: it hands over a request and keeps the reply.
+
+    :class:`~web.server.ViewerHandler` is the adapter between the guards above and
+    HTTP, and the adapter is exactly what the pure-function tests cannot reach --
+    that a rule *exists* and that ``do_POST`` *consults* it are two claims, and the
+    second one is the feature. So this drives the real handler, with its real
+    routing and its real status codes, over a socket made of two ``BytesIO``.
+
+    Still no port bound and no browser driven, which is the rule this suite keeps.
+    ``http.server`` asks a connection for exactly three things -- ``makefile`` for
+    the request, ``sendall`` for the reply, ``close`` at the end -- so those three
+    are the whole of it.
+    """
+
+    def __init__(self, request: bytes) -> None:
+        self._incoming = BytesIO(request)
+        self.reply = BytesIO()
+
+    def makefile(self, mode: str = "rb", bufsize: int = -1) -> BytesIO:
+        return self._incoming
+
+    def sendall(self, data: bytes) -> None:
+        self.reply.write(data)
+
+    def close(self) -> None:
+        pass
+
+
+class HandlerTestCase(unittest.TestCase):
+    """A case that can send a request to the handler and read the answer back."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.storage = Storage(Path(self._tmp.name))
+        self.auth = Authenticator(
+            password_hashes={
+                OWNER: hash_password("owner-pw"),
+                VIEWER: hash_password("viewer-pw"),
+            },
+            secret=b"a-32-byte-secret-for-the-tests!!",
+            cookie_secure=False,
+        )
+
+    def cookie_for(self, role: str) -> str:
+        """The ``Cookie`` header a browser signed in as ``role`` would send back."""
+        return self.auth.session_cookie(role).split(";", 1)[0]
+
+    def send(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+        cookie: Optional[str] = None,
+        auth: Optional[Authenticator] = None,
+        open_mode: bool = False,
+    ) -> Tuple[int, Optional[Dict[str, Any]]]:
+        """Drive one request through the handler; return its status and JSON body.
+
+        ``open_mode`` is the no-password server -- the one this tool has always
+        been on loopback -- which is a different thing from "no cookie".
+        """
+        encoded = json.dumps(body).encode("utf-8") if body is not None else b""
+        lines = [f"{method} {path} HTTP/1.1", "Host: 127.0.0.1"]
+        if body is not None:
+            lines.append("Content-Type: application/json")
+            lines.append(f"Content-Length: {len(encoded)}")
+        if cookie is not None:
+            lines.append(f"Cookie: {cookie}")
+        raw = ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8") + encoded
+
+        connection = _Connection(raw)
+        # The handler logs a line per request to stderr, which is the right thing
+        # for a server and a wall of noise in a test run. Swallowed here rather
+        # than stubbed out on the handler: log_message is not what is under test,
+        # but it should still be the real one running.
+        with redirect_stderr(StringIO()):
+            ViewerHandler(
+                connection,
+                ("127.0.0.1", 54321),
+                None,
+                storage=self.storage,
+                allowed_origins=_LOCAL_ORIGINS,
+                auth=None if open_mode else (auth or self.auth),
+            )
+
+        reply = connection.reply.getvalue()
+        status = int(reply.split(b" ", 2)[1])
+        _, _, payload = reply.partition(b"\r\n\r\n")
+        try:
+            return status, json.loads(payload.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return status, None
+
+
+class TestTheViewerMayNotWrite(HandlerTestCase):
+    """The feature, at the surface that enforces it: every write, refused."""
+
+    #: Every command web.api will run. Named here rather than imported from
+    #: web.api.COMMANDS on purpose: adding a command should make this test fail
+    #: until someone has decided whether a viewer may send it.
+    WRITES = ("start", "pause", "resume", "toggle", "stop", "task")
+
+    def test_a_viewer_is_refused_every_write(self) -> None:
+        for command in self.WRITES:
+            status, body = self.send(
+                "POST", f"/api/{command}", body={}, cookie=self.cookie_for(VIEWER)
+            )
+            self.assertEqual(403, status, f"{command} was not refused")
+            self.assertIn("only look", body["error"])
+
+    def test_the_owner_is_refused_none_of_them(self) -> None:
+        # The control. A 403 for everyone would pass the test above and be useless.
+        status, _ = self.send(
+            "POST", "/api/start", body={"task": "real"}, cookie=self.cookie_for(OWNER)
+        )
+        self.assertEqual(200, status)
+
+    def test_a_viewers_write_never_reaches_the_tracker(self) -> None:
+        # Not merely reported as refused -- refused. Nothing on disk moved.
+        self.send("POST", "/api/start", body={}, cookie=self.cookie_for(VIEWER))
+        self.assertIsNone(self.storage.load_current())
+
+    def test_no_cookie_is_a_401_and_not_a_403(self) -> None:
+        # The two refusals are different sentences: 401 means "log in", which is
+        # advice a viewer would only be misled by.
+        status, _ = self.send("POST", "/api/start", body={})
+        self.assertEqual(401, status)
+
+    def test_a_forged_promotion_is_no_session_at_all(self) -> None:
+        forged = self.cookie_for(VIEWER).replace(VIEWER, OWNER)
+        status, _ = self.send("POST", "/api/start", body={}, cookie=forged)
+        self.assertEqual(401, status)
+
+    def test_a_viewer_may_still_sign_itself_out(self) -> None:
+        # Ending your own session is not a power over the tracker.
+        status, _ = self.send("POST", "/api/logout", cookie=self.cookie_for(VIEWER))
+        self.assertEqual(200, status)
+
+
+class TestTheStatusPayloadNamesTheAccount(HandlerTestCase):
+    """What the app draws itself from, and both accounts read alike."""
+
+    def test_a_viewer_reads_the_status_in_full(self) -> None:
+        self.send("POST", "/api/start", body={"task": "secret"}, cookie=self.cookie_for(OWNER))
+        status, body = self.send("GET", "/api/status", cookie=self.cookie_for(VIEWER))
+        self.assertEqual(200, status)
+        self.assertEqual("running", body["state"])
+        # A viewer sees the task text: this account is read-only, not redacted.
+        self.assertEqual("secret", body["task"])
+
+    def test_the_status_names_the_role_reading_it(self) -> None:
+        for role in (OWNER, VIEWER):
+            _, body = self.send("GET", "/api/status", cookie=self.cookie_for(role))
+            self.assertEqual(role, body["role"])
+            self.assertTrue(body["login"])
+
+    def test_an_open_server_is_the_owner_and_has_no_login(self) -> None:
+        # The loopback tool as it always was: no password, so nobody to withhold
+        # anything from, and no Sign out button to draw.
+        status, body = self.send("GET", "/api/status", open_mode=True)
+        self.assertEqual(200, status)
+        self.assertEqual(OWNER, body["role"])
+        self.assertFalse(body["login"])
+
+    def test_an_open_server_still_writes(self) -> None:
+        status, _ = self.send("POST", "/api/start", body={}, open_mode=True)
+        self.assertEqual(200, status)
+
+
+class TestLoginNamesItsAccount(HandlerTestCase):
+    """One password per door, and the throttle counts the client, not the door."""
+
+    def test_each_password_opens_its_own_account(self) -> None:
+        for role, password in ((OWNER, "owner-pw"), (VIEWER, "viewer-pw")):
+            status, body = self.send(
+                "POST", "/api/login", body={"account": role, "password": password}
+            )
+            self.assertEqual(200, status)
+            self.assertEqual(role, body["role"])
+
+    def test_a_password_does_not_open_the_other_account(self) -> None:
+        status, _ = self.send(
+            "POST", "/api/login", body={"account": OWNER, "password": "viewer-pw"}
+        )
+        self.assertEqual(401, status)
+
+    def test_a_body_with_no_account_is_the_owners_door(self) -> None:
+        # The body the single-account form has always sent, and what a curl in
+        # somebody's notes still sends. It needs the owner's password, as before.
+        status, body = self.send("POST", "/api/login", body={"password": "owner-pw"})
+        self.assertEqual(200, status)
+        self.assertEqual(OWNER, body["role"])
+
+    def test_the_viewers_password_does_not_work_at_that_door_either(self) -> None:
+        status, _ = self.send("POST", "/api/login", body={"password": "viewer-pw"})
+        self.assertEqual(401, status)
+
+    def test_trying_the_other_account_buys_no_fresh_guesses(self) -> None:
+        # The claim the throttle makes, at the level that decides it. `_handle_login`
+        # keys on the client alone, so failures against *either* account fall in one
+        # budget -- key it on the account too and the last assertion here goes green
+        # at 401, which is the regression this exists to catch.
+        for attempt in range(self.auth.throttle.max_failures):
+            # Alternating doors, deliberately: an attacker would.
+            account = OWNER if attempt % 2 else VIEWER
+            status, _ = self.send(
+                "POST", "/api/login", body={"account": account, "password": f"wrong{attempt}"}
+            )
+            self.assertEqual(401, status)
+
+        status, body = self.send(
+            "POST", "/api/login", body={"account": OWNER, "password": "wrong-again"}
+        )
+        self.assertEqual(429, status)
+        self.assertIn("too many attempts", body["error"])
+
+    def test_the_lockout_cannot_be_worn_down_by_the_right_password(self) -> None:
+        for attempt in range(self.auth.throttle.max_failures):
+            self.send("POST", "/api/login", body={"account": VIEWER, "password": "no"})
+        # Correct, and still refused: the throttle is consulted before the password.
+        status, _ = self.send(
+            "POST", "/api/login", body={"account": OWNER, "password": "owner-pw"}
+        )
+        self.assertEqual(429, status)
+
+
+class TestTheLoginFormAsksForWhatIsConfigured(unittest.TestCase):
+    """One account is one password box; two is a choice between them."""
+
+    def test_one_account_is_asked_for_without_a_choice(self) -> None:
+        page = _login_page((OWNER,))
+        self.assertNotIn('type="radio"', page)
+        self.assertIn("Enter the password to continue.", page)
+
+    def test_one_account_still_names_itself_in_the_request(self) -> None:
+        # The hidden field is why the server has one shape of login body to read
+        # rather than two. The form always says which account it is signing in to.
+        self.assertIn(f'<input type="hidden" name="account" value="{OWNER}">', _picker((OWNER,)))
+
+    def test_two_accounts_are_offered_as_a_choice(self) -> None:
+        page = _login_page((OWNER, VIEWER))
+        self.assertIn(f'value="{OWNER}"', page)
+        self.assertIn(f'value="{VIEWER}"', page)
+        self.assertIn("Choose an account and enter its password.", page)
+
+    def test_the_owner_is_the_one_already_picked(self) -> None:
+        # A radiogroup with nothing checked can be submitted with no value at all,
+        # and the common case is you signing in to your own tracker.
+        picker = _picker((OWNER, VIEWER))
+        self.assertIn(f'value="{OWNER}" data-note="Full control — start, pause and stop the day." checked', picker)
+        self.assertNotIn("checked", picker.split(VIEWER, 1)[1])
+
+    def test_each_account_carries_its_own_explanation(self) -> None:
+        # The script shows these; nothing here should be the only copy of the text.
+        picker = _picker((OWNER, VIEWER))
+        self.assertIn("Read-only — see the hours, change nothing.", picker)
+
+    def test_no_slot_is_left_unfilled(self) -> None:
+        # The page is built by replace(), so a renamed sentinel would fail silently
+        # and ship an HTML comment where the password picker should be.
+        for accounts in ((OWNER,), (OWNER, VIEWER)):
+            page = _login_page(accounts)
+            self.assertNotIn("<!--picker-->", page)
+            self.assertNotIn("<!--caption-->", page)
+
+    def test_the_form_never_offers_a_door_with_no_password_behind_it(self) -> None:
+        # `accounts` comes from the configured hashes (see Authenticator.accounts),
+        # so an unconfigured viewer is not merely unchecked -- it is not there.
+        self.assertNotIn(VIEWER, _login_page((OWNER,)))
 
 
 if __name__ == "__main__":

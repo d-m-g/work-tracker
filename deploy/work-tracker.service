@@ -6,6 +6,13 @@
 # Assumes the repo is at /home/ubuntu/work-tracker and a password hash has been
 # written to /home/ubuntu/work-tracker/.password  (python3 -m web.auth --write .password).
 #
+# The second account is optional and is the line below it: drop
+# --viewer-password-file and the login is one password box again, exactly as it
+# was. Its hash is a *separate* file, made with
+#   python3 -m web.auth --account viewer --write .password-viewer
+# and someone signed in with it may read everything and change nothing. Neither
+# password file is in git (see .gitignore); they are put on the box by hand.
+#
 # Install:
 #   sudo cp deploy/work-tracker.service /etc/systemd/system/work-tracker.service
 #   sudo systemctl daemon-reload
@@ -21,6 +28,7 @@ WorkingDirectory=/home/ubuntu/work-tracker
 ExecStart=/usr/bin/python3 web/server.py \
     --host 127.0.0.1 --port 8765 \
     --password-file /home/ubuntu/work-tracker/.password \
+    --viewer-password-file /home/ubuntu/work-tracker/.password-viewer \
     --allow-origin tracker.d-m-g.dev
 Restart=always
 RestartSec=2

@@ -34,9 +34,12 @@ __pycache__/
 /conflicts/
 
 # Login secrets, when the viewer runs with a password. The signing secret and
-# the password hash live in the data directory (again, the repo by default);
-# committing either would defeat the point. Never track these.
+# the password hashes live in the data directory (again, the repo by default);
+# committing any of them would defeat the point. There is one file per account --
+# the owner's and, if you set one up, the read-only viewer's. Never track these.
 /.session_secret
 /.password
+/.password-viewer
 .session_secret
 .password
+.password-viewer

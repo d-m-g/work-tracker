@@ -4,11 +4,14 @@ Like the rest of the suite these bind no port and drive no browser. Every
 security decision in :mod:`web.auth` is a pure function or a small object with an
 injected clock, precisely so it can be asserted head-on -- "this forged token is
 refused", "this expired one is refused", "the sixth wrong password is locked
-out" -- instead of inferred from an HTTP round-trip.
+out", "this viewer cannot promote itself" -- instead of inferred from an HTTP
+round-trip.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import unittest
 from datetime import timedelta
 from pathlib import Path
@@ -18,15 +21,18 @@ from support import EPOCH, FakeClock
 
 from web.auth import (
     COOKIE_NAME,
+    OWNER,
+    VIEWER,
     Authenticator,
     LoginThrottle,
     hash_password,
     issue_token,
     load_or_create_secret,
     load_password_hash,
+    may_write,
     throttle_key,
+    verified_role,
     verify_password,
-    verify_token,
     write_private,
 )
 
@@ -73,34 +79,93 @@ class TestPasswordHashing(unittest.TestCase):
 
 
 class TestSessionTokens(unittest.TestCase):
-    """A token is a signed expiry: forge it or outlive it and it is refused."""
+    """A token is a signed expiry and a signed role: forge either and it is refused."""
 
     def setUp(self) -> None:
         self.secret = b"a-32-byte-secret-for-the-tests!!"
         self.clock = FakeClock()
 
-    def test_a_freshly_issued_token_verifies(self) -> None:
-        token = issue_token(self.secret, self.clock() + timedelta(days=30))
-        self.assertTrue(verify_token(self.secret, token, self.clock()))
+    def _signed(self, payload: str) -> str:
+        """A token with a *genuine* signature over ``payload``, whatever is in it.
+
+        For the cases where the question is not "was this signed by us" -- it was
+        -- but "is what it says an account, and does it say one at all". Signing it
+        properly is the only way to get past the signature check and reach them.
+        """
+        return f"{payload}.{hmac.new(self.secret, payload.encode('ascii'), hashlib.sha256).hexdigest()}"
+
+    def test_a_freshly_issued_token_names_its_role(self) -> None:
+        for role in (OWNER, VIEWER):
+            token = issue_token(self.secret, role, self.clock() + timedelta(days=30))
+            self.assertEqual(role, verified_role(self.secret, token, self.clock()))
 
     def test_an_expired_token_is_refused(self) -> None:
-        token = issue_token(self.secret, self.clock() + timedelta(hours=1))
+        token = issue_token(self.secret, OWNER, self.clock() + timedelta(hours=1))
         later = self.clock() + timedelta(hours=2)
-        self.assertFalse(verify_token(self.secret, token, later))
+        self.assertIsNone(verified_role(self.secret, token, later))
 
     def test_a_token_signed_with_another_secret_is_refused(self) -> None:
-        token = issue_token(b"a-different-secret-of-the-right-x", self.clock() + timedelta(days=1))
-        self.assertFalse(verify_token(self.secret, token, self.clock()))
+        token = issue_token(
+            b"a-different-secret-of-the-right-x", OWNER, self.clock() + timedelta(days=1)
+        )
+        self.assertIsNone(verified_role(self.secret, token, self.clock()))
 
     def test_a_tampered_expiry_is_refused(self) -> None:
-        token = issue_token(self.secret, self.clock() + timedelta(hours=1))
-        payload, _, signature = token.partition(".")
-        forged = f"{int(payload) + 10_000}.{signature}"
-        self.assertFalse(verify_token(self.secret, forged, self.clock()))
+        token = issue_token(self.secret, OWNER, self.clock() + timedelta(hours=1))
+        expiry, _, rest = token.partition(".")
+        forged = f"{int(expiry) + 10_000}.{rest}"
+        self.assertIsNone(verified_role(self.secret, forged, self.clock()))
+
+    def test_a_viewer_cannot_rewrite_itself_into_an_owner(self) -> None:
+        # The whole reason the role is inside what gets signed. This is the exact
+        # edit the holder of a read-only cookie would try, and all they hold is
+        # the cookie -- not the secret that would let them re-sign it.
+        token = issue_token(self.secret, VIEWER, self.clock() + timedelta(days=1))
+        forged = token.replace(VIEWER, OWNER)
+        self.assertIsNone(verified_role(self.secret, forged, self.clock()))
+
+    def test_a_role_that_is_not_an_account_is_refused(self) -> None:
+        # Signed by us, and still refused: a name that is not an account cannot be
+        # made into one by holding the secret, which matters the day a role is
+        # renamed and an old cookie is still in someone's browser.
+        tomorrow = int((self.clock() + timedelta(days=1)).timestamp())
+        self.assertIsNone(
+            verified_role(self.secret, self._signed(f"{tomorrow}.admin"), self.clock())
+        )
+
+    def test_signing_a_token_for_an_unknown_role_is_a_bug_not_a_refusal(self) -> None:
+        with self.assertRaises(ValueError):
+            issue_token(self.secret, "admin", self.clock() + timedelta(days=1))
+
+    def test_a_token_from_before_there_were_roles_is_refused(self) -> None:
+        # The old single-account format, which this server really did sign: the
+        # signature still checks out, and it is still refused, because it names no
+        # role and one must never be assumed for it. A re-login, not an escalation.
+        tomorrow = int((self.clock() + timedelta(days=1)).timestamp())
+        self.assertIsNone(verified_role(self.secret, self._signed(str(tomorrow)), self.clock()))
 
     def test_garbage_is_refused(self) -> None:
-        for junk in ("", "no-dot", "abc.def", "."):
-            self.assertFalse(verify_token(self.secret, junk, self.clock()))
+        for junk in ("", "no-dot", "abc.def", ".", "..", "1.owner", f"1.{OWNER}."):
+            self.assertIsNone(verified_role(self.secret, junk, self.clock()))
+
+
+class TestMayWrite(unittest.TestCase):
+    """The one line the read-only account comes down to."""
+
+    def test_the_owner_may_write(self) -> None:
+        self.assertTrue(may_write(OWNER))
+
+    def test_the_viewer_may_not(self) -> None:
+        self.assertFalse(may_write(VIEWER))
+
+    def test_no_session_may_not(self) -> None:
+        # None is what a missing or refused cookie yields, and it must fail closed
+        # here as well as at the caller that checks for it.
+        self.assertFalse(may_write(None))
+
+    def test_an_invented_role_may_not(self) -> None:
+        for name in ("admin", "root", "", "OWNER", "owner "):
+            self.assertFalse(may_write(name))
 
 
 class TestLoginThrottle(unittest.TestCase):
@@ -138,6 +203,11 @@ class TestLoginThrottle(unittest.TestCase):
         # One client's lockout never touches another's.
         self.assertEqual(0.0, self.throttle.retry_after("someone-else"))
 
+    # That one client's budget is not multiplied by the number of accounts they
+    # can name is decided by *what web.server keys this on*, not by anything in
+    # here -- so it is asserted where that decision is made, against the real
+    # login: tests.test_server.TestLoginNamesItsAccount.
+
 
 class TestThrottleKey(unittest.TestCase):
     """Which client a login failure is counted against, proxy or not."""
@@ -169,37 +239,83 @@ class TestAuthenticator(unittest.TestCase):
     def setUp(self) -> None:
         self.clock = FakeClock()
         self.auth = Authenticator(
-            password_hash=hash_password("swordfish"),
+            password_hashes={OWNER: hash_password("swordfish"), VIEWER: hash_password("guest")},
             secret=b"a-32-byte-secret-for-the-tests!!",
             clock=self.clock,
         )
 
-    def test_the_right_password_is_accepted(self) -> None:
-        self.assertTrue(self.auth.verify_login("swordfish"))
+    def test_each_password_signs_in_as_its_own_account(self) -> None:
+        self.assertEqual(OWNER, self.auth.verify_login(OWNER, "swordfish"))
+        self.assertEqual(VIEWER, self.auth.verify_login(VIEWER, "guest"))
 
     def test_a_wrong_password_is_rejected(self) -> None:
-        self.assertFalse(self.auth.verify_login("guess"))
+        self.assertIsNone(self.auth.verify_login(OWNER, "guess"))
 
-    def test_a_non_string_password_is_rejected(self) -> None:
-        # The body's "password" field could be anything JSON allows.
+    def test_one_accounts_password_does_not_open_the_other(self) -> None:
+        # The point of two accounts. Handing out the viewer's password must not be
+        # a way to become the owner, and knowing the owner's must not smuggle you
+        # in as a viewer either -- each door takes its own key and no other.
+        self.assertIsNone(self.auth.verify_login(OWNER, "guest"))
+        self.assertIsNone(self.auth.verify_login(VIEWER, "swordfish"))
+
+    def test_an_account_that_does_not_exist_is_rejected(self) -> None:
+        owner_only = Authenticator(
+            password_hashes={OWNER: hash_password("swordfish")},
+            secret=b"a-32-byte-secret-for-the-tests!!",
+            clock=self.clock,
+        )
+        # Right password, an account that was never configured: still no.
+        self.assertIsNone(owner_only.verify_login(VIEWER, "swordfish"))
+        self.assertIsNone(self.auth.verify_login("admin", "swordfish"))
+
+    def test_a_non_string_credential_is_rejected(self) -> None:
+        # Both fields arrive as JSON and could be anything JSON allows.
         for value in (None, 42, {"a": 1}, ["x"], True):
-            self.assertFalse(self.auth.verify_login(value))
+            self.assertIsNone(self.auth.verify_login(OWNER, value))
+            self.assertIsNone(self.auth.verify_login(value, "swordfish"))
 
-    def test_a_fresh_session_cookie_authenticates(self) -> None:
-        header = _cookie_header(self.auth.session_cookie())
-        self.assertTrue(self.auth.is_authenticated(header))
+    def test_a_fresh_cookie_carries_the_role_it_was_issued_for(self) -> None:
+        for role in (OWNER, VIEWER):
+            header = _cookie_header(self.auth.session_cookie(role))
+            self.assertEqual(role, self.auth.role_for(header))
 
-    def test_no_cookie_is_not_authenticated(self) -> None:
-        self.assertFalse(self.auth.is_authenticated(None))
-        self.assertFalse(self.auth.is_authenticated(""))
+    def test_no_cookie_is_no_session(self) -> None:
+        self.assertIsNone(self.auth.role_for(None))
+        self.assertIsNone(self.auth.role_for(""))
 
-    def test_an_unrelated_cookie_is_not_authenticated(self) -> None:
-        self.assertFalse(self.auth.is_authenticated("other=value; theme=dark"))
+    def test_an_unrelated_cookie_is_no_session(self) -> None:
+        self.assertIsNone(self.auth.role_for("other=value; theme=dark"))
 
     def test_a_session_expires(self) -> None:
-        header = _cookie_header(self.auth.session_cookie())
+        header = _cookie_header(self.auth.session_cookie(OWNER))
         self.clock.advance(int(timedelta(days=31).total_seconds()))
-        self.assertFalse(self.auth.is_authenticated(header))
+        self.assertIsNone(self.auth.role_for(header))
+
+    def test_the_accounts_are_offered_in_a_fixed_order(self) -> None:
+        self.assertEqual((OWNER, VIEWER), self.auth.accounts)
+
+    def test_an_owner_only_login_offers_one_account(self) -> None:
+        # What keeps the form a single password box when no viewer is configured.
+        auth = Authenticator(
+            password_hashes={OWNER: hash_password("x")},
+            secret=b"another-32-byte-secret-for-tests",
+            clock=self.clock,
+        )
+        self.assertEqual((OWNER,), auth.accounts)
+
+    def test_a_login_without_an_owner_is_refused_outright(self) -> None:
+        with self.assertRaises(ValueError):
+            Authenticator(
+                password_hashes={VIEWER: hash_password("guest")},
+                secret=b"another-32-byte-secret-for-tests",
+            )
+
+    def test_an_account_that_is_not_a_role_is_refused_outright(self) -> None:
+        with self.assertRaises(ValueError):
+            Authenticator(
+                password_hashes={OWNER: hash_password("x"), "admin": hash_password("y")},
+                secret=b"another-32-byte-secret-for-tests",
+            )
 
     def test_logout_clears_the_cookie(self) -> None:
         logout = self.auth.logout_cookie()
@@ -207,19 +323,19 @@ class TestAuthenticator(unittest.TestCase):
         self.assertIn("Max-Age=0", logout)
 
     def test_the_cookie_is_hardened(self) -> None:
-        cookie = self.auth.session_cookie()
+        cookie = self.auth.session_cookie(OWNER)
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertIn("Secure", cookie)
 
     def test_insecure_cookie_drops_only_the_secure_flag(self) -> None:
         auth = Authenticator(
-            password_hash=hash_password("x"),
+            password_hashes={OWNER: hash_password("x")},
             secret=b"another-32-byte-secret-for-tests",
             cookie_secure=False,
             clock=self.clock,
         )
-        cookie = auth.session_cookie()
+        cookie = auth.session_cookie(OWNER)
         self.assertNotIn("Secure", cookie)
         self.assertIn("HttpOnly", cookie)
 

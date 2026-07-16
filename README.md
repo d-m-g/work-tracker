@@ -373,7 +373,8 @@ from this Mac and nowhere else — your working hours are nobody else's business
 | `--root DIR` | Read sessions from a different data directory. |
 | `--host H` | Bind address. Leave it alone unless you *want* the network to see it. |
 | `--allow-origin HOST` | Also accept writes from this host, so another device can drive the tracker. Repeatable. This machine is always allowed. See [Driving it from your phone](#driving-it-from-your-phone). |
-| `--password-file PATH` | Require a login. `PATH` holds a password hash (see [Putting it on the public internet](#putting-it-on-the-public-internet-require-a-password)). The `WORK_TRACKER_PASSWORD_HASH` environment variable is used instead if set. |
+| `--password-file PATH` | Require a login. `PATH` holds the owner's password hash (see [Putting it on the public internet](#putting-it-on-the-public-internet-require-a-password)). The `WORK_TRACKER_PASSWORD_HASH` environment variable is used instead if set. |
+| `--viewer-password-file PATH` | Also offer a read-only account with its own password. Needs `--password-file` too. The `WORK_TRACKER_VIEWER_PASSWORD_HASH` environment variable is used instead if set. See [A second password that may only look](#a-second-password-that-may-only-look). |
 | `--cookie-insecure` | Don't mark the session cookie `Secure`. Only for testing login over plain `http` on localhost — never for a real, TLS-terminated deployment. |
 
 If you run the server before building the UI, it says so on the page rather than
@@ -501,6 +502,54 @@ How it holds up, in one breath each:
   the server refuses to start, rather than quietly coming up with no password on a
   network you meant to lock down.
 
+### A second password that may only look
+
+Sometimes what you want to hand out is the *answer* — is he working, and on what —
+without handing over the ability to end someone's day from a phone. That is the
+**viewer** account: its own password, every read, no writes.
+
+```sh
+# A second hash, in its own file. Nothing about it is derived from the owner's.
+python3 -m web.auth --account viewer --write .password-viewer
+
+python3 web/server.py \
+    --password-file .password \
+    --viewer-password-file .password-viewer \
+    --allow-origin tracker.example.com
+```
+
+The login form now offers the two accounts and you pick one before typing its
+password. There are two of them and they are named on the form, which is fine —
+the account names were never the secret. The password is.
+
+| | Owner | Viewer |
+|---|---|---|
+| The live session, the history, the task names | **yes** | **yes** |
+| Start, pause, resume, stop, naming a task | **yes** | **403** |
+| Signing out | yes | yes — it ends *their* session, not your day |
+
+* **Two passwords, neither derivable from the other** — separate hashes, separately
+  salted. Handing out the viewer's password gives away no part of yours.
+* **The refusal is the server's, not the page's** — the app draws a viewer no
+  buttons, but that is courtesy. What stops the write is `web.auth.may_write`,
+  checked on every `POST` before the body is even read off the socket. A viewer who
+  edits the JavaScript, or skips it and reaches for `curl`, gets the same 403.
+* **The role is inside the signature** — the cookie says `{expiry}.{role}.{sig}`,
+  and the signature covers all of it. A viewer cannot promote itself by rewriting
+  its own cookie: the edit breaks the signature, and it has no way to repair one.
+* **One budget of guesses per client, not per account** — a second door does not
+  buy a second set of attempts. Burn the limit on either account and both are
+  locked.
+* **It fails closed here too** — a viewer password with no owner password refuses
+  to start (a tracker nobody can drive is not a configuration), as does a
+  `--viewer-password-file` naming an empty one.
+
+The viewer account is opt-in on top of a login that is itself opt-in. Configure
+only `--password-file` and there is one account and one password box, exactly as
+before; configure nothing and the server runs open on loopback, exactly as it
+always did. Rotating either password is the `web.auth` command again and a
+restart — and rotating one does not touch the other.
+
 **You still need TLS in front.** The server speaks plain `http`; run it bound to
 loopback behind a reverse proxy that terminates HTTPS —
 [Caddy](https://caddyserver.com) does it in a two-line config and fetches the
@@ -520,9 +569,10 @@ HTTPS a password travels in the clear. (For local testing over `http` only, add
 cookie and the page comes back as the login form. It appears only when there is
 something to end: on a loopback server with no password there is no session, so
 there is no button, and the server says which case you are in (`login`, on the
-status payload). To sign *every* device out at once instead, delete
-`.session_secret` and restart — that invalidates every cookie the old secret ever
-signed.
+status payload). Both accounts have it, because signing out ends your own browser
+session and is nobody's privilege. To sign *every* device out at once instead —
+both accounts, everywhere — delete `.session_secret` and restart, which
+invalidates every cookie the old secret ever signed.
 
 Rotating the password is `python3 -m web.auth --write .password` again and a
 restart.
@@ -580,6 +630,11 @@ two ever drift, the demo is the one that is wrong.
   put in the opposite corner from **Stop** on purpose: the two are a sentence apart
   ("end the session") and a day apart in consequence, so they are not placed
   together and are not styled alike.
+* **Nothing to press, for an account that may not** — everything above belongs to
+  the owner. Signed in as the [viewer](#a-second-password-that-may-only-look), the
+  same page reads the same hours with the buttons and the task boxes simply absent
+  rather than greyed out: a disabled control promises this could have been yours
+  under some other circumstance, and for a viewer it never is.
 * **The day as a strip** — the signature of the thing. A day is drawn as a band on
   a **time-of-day** axis: worked time is ink, and a pause is the *absence* of ink,
   the track showing through. The live session carries a warm edge marking where

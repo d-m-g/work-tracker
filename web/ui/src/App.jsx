@@ -36,6 +36,20 @@ const DEMO = isDemo()
 function Viewer({ tracker, demo = false }) {
   const { status, sessions, error, refusal, busy, send, signOut } = tracker
 
+  // Which of the two accounts is reading this. The server says so on every status
+  // poll, and it is the only thing that ever says so — there is no way to ask the
+  // page what it is allowed to do and no reason to want one, because the page is
+  // not what decides. A viewer who edits this flag to `false` in their own
+  // browser gets the buttons drawn and a 403 from every one of them: the refusal
+  // lives in web/server.py, where the visitor cannot reach it. What this does is
+  // keep us from offering someone a control we already know we would refuse,
+  // which is courtesy, not security.
+  //
+  // Unknown until the first poll lands, and that is deliberately read-only:
+  // `undefined !== 'owner'`, so the split second before the server has spoken
+  // shows no buttons rather than buttons that might not be yours.
+  const readOnly = status?.role !== 'owner'
+
   // The history is days, not sessions: every session that touched a Tuesday is
   // drawn on Tuesday's one strip, and a session that ran past midnight is cut at
   // it so each day counts only its own hours. See lib/timeline.js.
@@ -58,7 +72,14 @@ function Viewer({ tracker, demo = false }) {
       <header className="masthead">
         <div className="masthead__titles">
           <h1>Work Tracker</h1>
-          <p className="dim">Start, pause and stop from here, the shortcuts, or the CLI.</p>
+          {/* The strapline is a promise about what the buttons below do, so it
+              cannot be made to someone who has none. Say what this page is for
+              them instead: the same hours, and nothing to press. */}
+          <p className="dim">
+            {readOnly
+              ? 'Someone else’s hours, as they are recorded. Read-only.'
+              : 'Start, pause and stop from here, the shortcuts, or the CLI.'}
+          </p>
         </div>
 
         {/* Only when there is a session to end. On a loopback server with no
@@ -88,7 +109,7 @@ function Viewer({ tracker, demo = false }) {
         </p>
       )}
 
-      <LiveSession status={status} axis={axis} busy={busy} send={send} />
+      <LiveSession status={status} axis={axis} busy={busy} send={send} readOnly={readOnly} />
 
       {/* Only in the demo, and only here: on the real page the widget is three
           inches away on your own screen, and a picture of it would be a picture of
@@ -101,6 +122,7 @@ function Viewer({ tracker, demo = false }) {
         unreadable={sessions?.unreadable ?? []}
         axis={axis}
         send={send}
+        readOnly={readOnly}
       />
     </main>
   )

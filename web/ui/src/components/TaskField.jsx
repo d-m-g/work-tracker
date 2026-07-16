@@ -12,8 +12,15 @@ import { useEffect, useRef, useState } from 'react'
  * It commits on Enter or on blur, reverts on Escape, and — if the server refuses
  * the edit — puts back what is true rather than leaving your rejected text on
  * screen looking saved.
+ *
+ * `readOnly` is the view-only account, and it is a different element rather than
+ * a disabled one. A greyed-out input is a promise that this could have been yours
+ * to write if only something were otherwise — a session, a permission, a moment's
+ * patience — and for a viewer none of that is true, ever. So the line is what it
+ * has always looked like anyway (see `.task` in styles.css: no box, no chrome,
+ * just the sentence) and simply cannot be typed into. Nothing is dangled.
  */
-export default function TaskField({ value, onCommit, placeholder, id }) {
+export default function TaskField({ value, onCommit, placeholder, id, readOnly = false }) {
   const [draft, setDraft] = useState(value ?? '')
   const [saved, setSaved] = useState(false)
   const editing = useRef(false)
@@ -24,6 +31,18 @@ export default function TaskField({ value, onCommit, placeholder, id }) {
   useEffect(() => {
     if (!editing.current) setDraft(value ?? '')
   }, [value])
+
+  // Below every hook, never above one: the account cannot change without a fresh
+  // status from the server, but React counts hook calls per render regardless,
+  // and a return that skipped some would be a bug waiting for the day this flag
+  // first flips under a mounted component.
+  if (readOnly) {
+    return (
+      <p className="task">
+        <span className={`task__text ${value ? '' : 'dim'}`}>{value || 'No task named.'}</span>
+      </p>
+    )
+  }
 
   const commit = async () => {
     editing.current = false

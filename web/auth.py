@@ -6,10 +6,33 @@ a second, larger question -- *who may look at all* -- and this module answers it
 
 The shape mirrors :mod:`web.api`: everything here is a pure function of its
 arguments, so the security-critical parts -- hashing a password, signing a
-session, deciding whether a cookie is still valid -- are asserted directly in the
-tests, with no port bound and no browser driven. What :mod:`web.server` adds on
-top is a thin adapter: read the ``Cookie`` header, turn a ``False`` into a 401,
-write a ``Set-Cookie`` on the way out.
+session, deciding whether a cookie is still valid, deciding what that session may
+then *do* -- are asserted directly in the tests, with no port bound and no browser
+driven. What :mod:`web.server` adds on top is a thin adapter: read the ``Cookie``
+header, turn a ``None`` into a 401, a read-only role into a 403, write a
+``Set-Cookie`` on the way out.
+
+The two accounts
+----------------
+
+There are two, and the whole of the difference between them is one line
+(:func:`may_write`):
+
+* :data:`OWNER` -- you. Reads everything, and drives the tracker: start, pause,
+  resume, stop, and naming what a session was spent on.
+* :data:`VIEWER` -- whoever you gave the read-only password to. Reads exactly
+  what you read, and cannot change a thing.
+
+Each has its *own* password, and neither password is derivable from the other:
+they are separate hashes, separately salted. Handing out the viewer password
+gives away no part of the owner's, so the read-only account is a genuine
+restriction rather than a UI that politely hides the buttons.
+
+Which account a login is for is *named by the request*, not guessed at by trying
+both hashes in turn. That is what keeps a login to a single PBKDF2 run --
+deliberately an expensive one -- rather than one run per account on the way to a
+"no". The account names are not secrets and are not treated as any: they are
+printed on the login form. The password is the whole of the security.
 
 The threat model
 ----------------
@@ -17,13 +40,17 @@ The threat model
 The tool is a personal one, but a public URL is a public URL. So:
 
 * **Passwords are never stored, only their PBKDF2-HMAC hashes are.** A leaked
-  data directory does not leak the password.
+  data directory does not leak either password.
 * **Sessions are stateless, signed cookies.** The server keeps a random secret
-  and signs ``{expiry}`` with it; a cookie the server did not sign is worthless,
-  and one whose expiry has passed is refused. There is no session table to leak
-  and none to grow without bound.
-* **Login is rate-limited per client.** Guessing the password by brute force is
-  slowed to a crawl and, past a threshold, locked out for a window.
+  and signs ``{expiry}.{role}`` with it; a cookie the server did not sign is
+  worthless, and one whose expiry has passed is refused. There is no session
+  table to leak and none to grow without bound.
+* **The role is inside what is signed.** A viewer cannot promote itself to owner
+  by editing its own cookie -- the edit breaks the signature, and the signature is
+  checked before the role is so much as read.
+* **Login is rate-limited per client, not per account.** Guessing a password by
+  brute force is slowed to a crawl and, past a threshold, locked out for a window
+  -- and naming a different account does not buy a fresh budget of guesses.
 * **Every comparison that touches a secret is constant-time** (:func:`hmac.compare_digest`),
   so neither the password check nor the signature check leaks its answer through
   how long it took.
@@ -32,7 +59,9 @@ Auth is *opt-in*. With no password configured the viewer behaves exactly as it
 always has -- loopback, no login -- so driving it locally from the CLI and the
 Shortcuts is unchanged. Configure a password and the same server refuses every
 request, read or write, that does not carry a valid session. That is the switch
-:mod:`web.server` throws when you deploy it somewhere the network can reach.
+:mod:`web.server` throws when you deploy it somewhere the network can reach. The
+viewer account is opt-in on top of that: configure only an owner password and
+there is one account and one password box, exactly as before.
 """
 
 from __future__ import annotations
@@ -46,21 +75,25 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 from tracker.utils import now
 
 __all__ = [
     "COOKIE_NAME",
+    "OWNER",
+    "ROLES",
+    "VIEWER",
     "Authenticator",
     "LoginThrottle",
     "hash_password",
     "issue_token",
     "load_or_create_secret",
     "load_password_hash",
+    "may_write",
     "throttle_key",
+    "verified_role",
     "verify_password",
-    "verify_token",
     "write_private",
 ]
 
@@ -77,6 +110,44 @@ COOKIE_NAME = "wt_session"
 #: Peer addresses that mean "this request came through a proxy on this machine".
 #: Only for one of these do we believe an X-Forwarded-For header.
 _LOOPBACK_PEERS = frozenset({"127.0.0.1", "::1"})
+
+# ---------------------------------------------------------------------------
+# roles
+# ---------------------------------------------------------------------------
+
+#: You: the account that drives the tracker. Always configured when there is a
+#: login at all -- an installation with only a read-only account would be one
+#: nobody could start a session from.
+OWNER = "owner"
+
+#: The read-only account. Sees the live session and the whole history, exactly as
+#: the owner does, and is refused every write.
+VIEWER = "viewer"
+
+#: Every account there is, in the order the login form offers them. A role that is
+#: not in here is not a role: it is refused at the door, whether it arrived in a
+#: login body or in a cookie.
+ROLES: Tuple[str, ...] = (OWNER, VIEWER)
+
+#: Which accounts may change something. This frozenset *is* the read-only
+#: account -- everything else about a viewer's session is identical to an owner's.
+_WRITERS = frozenset({OWNER})
+
+
+def may_write(role: Optional[str]) -> bool:
+    """Decide whether ``role`` may run a command that changes something.
+
+    The one line the read-only account comes down to. It takes an ``Optional``
+    and answers ``False`` for ``None`` on purpose: "no session at all" and "a
+    session that may not write" both fail closed here, so a caller that forgets
+    to check for a missing session still cannot write. (:mod:`web.server` checks
+    anyway, and answers the two apart -- a 401 and a 403 are different sentences.)
+
+    Kept a free function, with no ``self`` and no socket, so the rule is asserted
+    head-on in the tests -- the same shape as :func:`web.server.public_path` and
+    :func:`web.server._origin_allowed`.
+    """
+    return role in _WRITERS
 
 
 def throttle_key(peer: Optional[str], forwarded_for: Optional[str]) -> str:
@@ -163,36 +234,61 @@ def _sign(secret: bytes, payload: str) -> str:
     return hmac.new(secret, payload.encode("ascii"), hashlib.sha256).hexdigest()
 
 
-def issue_token(secret: bytes, expires_at: datetime) -> str:
-    """Mint a session token that is valid until ``expires_at``.
+def issue_token(secret: bytes, role: str, expires_at: datetime) -> str:
+    """Mint a session token that signs ``role`` in until ``expires_at``.
 
-    The token is ``{expiry-epoch}.{signature}``. It carries no identity and no
-    secret of its own -- only a moment and a proof, signed by the server, that
-    the server is the one who said so. There is nothing in it worth stealing that
-    stealing the whole cookie would not already give you.
+    The token is ``{expiry-epoch}.{role}.{signature}``, where the signature covers
+    ``{expiry-epoch}.{role}`` -- both of them, together. That is what makes the
+    role safe to keep in a cookie the browser holds and could edit: rewriting
+    ``viewer`` to ``owner`` invalidates the signature, and there is no signature
+    the holder can compute to repair it.
+
+    It carries no secret of its own -- only a moment, a name for what may be done,
+    and a proof that the server is the one who said so. There is nothing in it
+    worth stealing that stealing the whole cookie would not already give you.
+
+    Raises:
+        ValueError: If ``role`` is not one of :data:`ROLES`. Minting a token for
+            an account that does not exist is a bug here, not a request to refuse.
     """
-    payload = str(int(expires_at.timestamp()))
+    if role not in ROLES:
+        raise ValueError(f"refusing to sign a token for an unknown role: {role!r}")
+    payload = f"{int(expires_at.timestamp())}.{role}"
     return f"{payload}.{_sign(secret, payload)}"
 
 
-def verify_token(secret: bytes, token: str, at: datetime) -> bool:
-    """Decide whether ``token`` is one this server signed and has not expired.
+def verified_role(secret: bytes, token: str, at: datetime) -> Optional[str]:
+    """Return the role ``token`` proves, or ``None`` if it proves nothing.
 
-    Two ways to fail, both a plain ``False``: the signature does not match (the
-    token was forged or tampered with), or the expiry has passed. The signature
-    is checked first and in constant time, so an attacker learns nothing by
-    watching how the check fails.
+    Every way of failing is the same ``None``: the signature does not match (the
+    token was forged or tampered with), the expiry has passed, or what it names is
+    not an account this server has. The signature is checked *first* and in
+    constant time, so nothing downstream ever reads a byte the server did not
+    itself write, and an attacker learns nothing by watching how the check fails.
+
+    A token in the old, single-account format (``{expiry}.{signature}``, which
+    this server did once sign) fails here, and fails closed. Its payload carries
+    no role, so there is no role to find in it, and the answer is ``None`` rather
+    than a guess at one. The cost of that is a re-login for anyone holding a
+    cookie from before the second account existed, which is the correct price:
+    the alternative is inferring authority from a token that never stated any.
     """
-    if not token or "." not in token:
-        return False
-    payload, _, signature = token.partition(".")
+    if not token:
+        return None
+    payload, separator, signature = token.rpartition(".")
+    if not separator:
+        return None
     if not hmac.compare_digest(signature, _sign(secret, payload)):
-        return False
+        return None
+
+    raw_expiry, separator, role = payload.partition(".")
+    if not separator or role not in ROLES:
+        return None
     try:
-        expiry = int(payload)
+        expiry = int(raw_expiry)
     except ValueError:
-        return False
-    return at.timestamp() < expiry
+        return None
+    return role if at.timestamp() < expiry else None
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +305,13 @@ class LoginThrottle:
     once; at or above it, the client must wait until the oldest failure expires.
     A success clears the slate immediately, so a fat-fingered password a few
     times running never locks out the person who then gets it right.
+
+    The key is the *client*, never the client and the account it named -- see
+    :func:`throttle_key`, which yields an address and nothing else. Counting per
+    account would hand an attacker one budget of guesses per account name they
+    can type, which is to say a fresh one whenever the old one runs out; there
+    are two accounts today and the exchange rate should not be two-for-one. One
+    client, one budget, however many doors they try it on.
 
     State is in-memory and per-process, which is the right size for a
     single-instance personal tool: nothing to persist, nothing to leak, and a
@@ -263,14 +366,17 @@ class LoginThrottle:
 
 @dataclass
 class Authenticator:
-    """Everything the server needs to run a login: the hash, the secret, the rules.
+    """Everything the server needs to run a login: the hashes, the secret, the rules.
 
     One of these is built at startup when a password is configured, and handed to
     every request handler. When none is built, the server runs open exactly as it
     did before -- so the presence of this object *is* the on switch.
     """
 
-    password_hash: str
+    #: One encoded hash per configured account, keyed by role. :data:`OWNER` is
+    #: mandatory; :data:`VIEWER` is there only if a second password was set up,
+    #: and its absence is what makes the login form a single box again.
+    password_hashes: Mapping[str, str]
     secret: bytes
     ttl: timedelta = timedelta(days=30)
     #: Mark the cookie ``Secure`` so the browser only ever sends it over HTTPS.
@@ -281,22 +387,65 @@ class Authenticator:
     throttle: LoginThrottle = field(default_factory=LoginThrottle)
     clock: Clock = now
 
-    def verify_login(self, password: object) -> bool:
-        """True if ``password`` is the configured one. Non-strings are just wrong."""
-        if not isinstance(password, str):
-            return False
-        return verify_password(password, self.password_hash)
+    def __post_init__(self) -> None:
+        """Refuse to exist in a shape the server could not safely serve.
 
-    def is_authenticated(self, cookie_header: Optional[str]) -> bool:
-        """True if the request's ``Cookie`` header carries a live session."""
+        Both of these are the operator's mistake caught at startup rather than
+        at the first request: an authenticator with no owner is one nobody can
+        drive the tracker from, and one keyed by a name that is not a role would
+        hold a password that no login could ever reach and no token could name.
+        """
+        unknown = sorted(set(self.password_hashes) - set(ROLES))
+        if unknown:
+            raise ValueError(f"not an account: {', '.join(unknown)}")
+        if OWNER not in self.password_hashes:
+            raise ValueError(f"a login needs an {OWNER} password")
+
+    @property
+    def accounts(self) -> Tuple[str, ...]:
+        """The configured accounts, in :data:`ROLES` order -- what the form offers.
+
+        One entry means one password box and no picker; two means the choice. It
+        is derived from the hashes rather than tracked alongside them, so the form
+        cannot come to offer a door there is no password behind.
+        """
+        return tuple(role for role in ROLES if role in self.password_hashes)
+
+    def verify_login(self, account: object, password: object) -> Optional[str]:
+        """Return the role ``password`` signs in as, or ``None`` if it does not.
+
+        The account is named by the caller, so exactly one hash is consulted and
+        exactly one PBKDF2 runs -- the expensive thing happens once per attempt,
+        never once per account. An account that is not configured is refused
+        before any hashing at all, which is a timing difference and deliberately
+        not a secret: the names are printed on the login form. What the timing
+        cannot tell you is the only thing worth knowing, which is the password.
+
+        Both arguments are ``object`` because both arrived as JSON and could be
+        anything JSON allows. A non-string is not a wrong credential to be
+        checked; it is not a credential, and it is refused as one.
+        """
+        if not isinstance(account, str) or not isinstance(password, str):
+            return None
+        encoded = self.password_hashes.get(account)
+        if encoded is None:
+            return None
+        return account if verify_password(password, encoded) else None
+
+    def role_for(self, cookie_header: Optional[str]) -> Optional[str]:
+        """The role the request's ``Cookie`` header proves, or ``None`` for none.
+
+        The server's whole question, answered once per request: ``None`` is a 401,
+        anything else is a session and names what it may do.
+        """
         token = _read_cookie(cookie_header, COOKIE_NAME)
         if token is None:
-            return False
-        return verify_token(self.secret, token, self.clock())
+            return None
+        return verified_role(self.secret, token, self.clock())
 
-    def session_cookie(self) -> str:
-        """A ``Set-Cookie`` value that logs the browser in for :attr:`ttl`."""
-        token = issue_token(self.secret, self.clock() + self.ttl)
+    def session_cookie(self, role: str) -> str:
+        """A ``Set-Cookie`` value that logs the browser in as ``role`` for :attr:`ttl`."""
+        token = issue_token(self.secret, role, self.clock() + self.ttl)
         return self._cookie(token, int(self.ttl.total_seconds()))
 
     def logout_cookie(self) -> str:
@@ -399,13 +548,37 @@ def load_password_hash(env_value: Optional[str], file_path: Optional[Path]) -> O
 # ---------------------------------------------------------------------------
 
 
+#: How each account's hash is configured, for the advice the CLI prints once it
+#: has one. Keyed by role: the server flag, the environment variable that
+#: overrides it, and whether that flag is enough on its own. Kept beside the roles
+#: it describes rather than imported from :mod:`web.server`, which imports *this*
+#: module and not the other way about.
+#:
+#: The viewer's flag is *not* enough on its own -- ``--viewer-password-file``
+#: without ``--password-file`` is refused at startup, because a tracker that can
+#: be watched and not driven is nobody's intention. So the advice for it says
+#: "alongside" rather than naming a command that would fail.
+_CONFIGURED_BY: Dict[str, Tuple[str, str, bool]] = {
+    OWNER: ("--password-file", "WORK_TRACKER_PASSWORD_HASH", True),
+    VIEWER: ("--viewer-password-file", "WORK_TRACKER_VIEWER_PASSWORD_HASH", False),
+}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Prompt for a password and print (or write) its hash.
 
-    Run it once to create the credential the server checks against::
+    Run it once per account to create the credentials the server checks against::
 
-        python3 -m web.auth                 # prints the hash line
-        python3 -m web.auth --write .password
+        python3 -m web.auth                                        # prints the hash line
+        python3 -m web.auth --write .password                      # the owner: you
+        python3 -m web.auth --account viewer --write .password-viewer
+
+    The two accounts are two passwords, and this makes them one at a time -- there
+    is no step here that derives one from the other, because nothing about the
+    read-only account should be recoverable from the owner's password or the other
+    way round. ``--account`` picks nothing about the hashing, which is identical
+    for both; it picks which file and flag the closing advice names, so that the
+    hash you just made ends up where the server will actually look for it.
 
     The password is read with :func:`getpass.getpass`, so it never appears on the
     command line or in the shell history, and only its hash ever leaves here.
@@ -415,14 +588,25 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(description="Generate a work-tracker login password hash.")
     parser.add_argument(
+        "--account",
+        choices=ROLES,
+        default=OWNER,
+        help=(
+            f"which account this password is for: '{OWNER}' drives the tracker, "
+            f"'{VIEWER}' may only look (default: {OWNER})"
+        ),
+    )
+    parser.add_argument(
         "--write",
         type=Path,
         metavar="PATH",
         help="write the hash to PATH (created 0600) instead of printing it",
     )
     args = parser.parse_args(argv)
+    flag, variable, sufficient = _CONFIGURED_BY[args.account]
+    owner_flag = _CONFIGURED_BY[OWNER][0]
 
-    password = getpass.getpass("Choose a password: ")
+    password = getpass.getpass(f"Choose the {args.account} password: ")
     if not password:
         print("error: an empty password is not allowed", file=sys.stderr)
         return 1
@@ -433,13 +617,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     encoded = hash_password(password)
     if args.write:
         write_private(args.write, encoded + "\n")
-        print(f"wrote the password hash to {args.write} (mode 0600)")
-        print("start the server with --password-file to require this password.")
+        print(f"wrote the {args.account} password hash to {args.write} (mode 0600)")
+        if sufficient:
+            print(f"start the server with {flag} {args.write} to require this password.")
+        else:
+            print(
+                f"add {flag} {args.write} to the server's command line, alongside the "
+                f"{owner_flag} the owner's password is in, to require this password."
+            )
     else:
         print(encoded)
+        advice = f"set {variable} to this value, or save it to a file and pass {flag}"
         print(
-            "set WORK_TRACKER_PASSWORD_HASH to this value, or save it to a file and "
-            "pass --password-file, to require it.",
+            f"{advice}, to require it." if sufficient else f"{advice} as well as {owner_flag}, to require it.",
             file=sys.stderr,
         )
     return 0

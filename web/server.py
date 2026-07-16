@@ -48,6 +48,28 @@ workflow is unchanged, and the switch is thrown only when you deploy. See
 :func:`_build_auth`, which *fails closed*: naming a password file that turns out
 to be empty stops the server rather than quietly starting it unprotected.
 
+**A second password may look without touching.** Add ``--viewer-password-file``
+(or ``WORK_TRACKER_VIEWER_PASSWORD_HASH``) and there is a second account with its
+own password: it reads the live session and the whole history exactly as you do,
+and every write it attempts is a 403 -- start, pause, resume, stop, and naming a
+task alike. It is for handing someone the URL when what you want them to have is
+the answer to "is he working, and on what", not the ability to end your day from
+their phone.
+
+The refusal is *here*, in the server, before the tracker is reached. The UI does
+draw a viewer no buttons (it is told the role on the status poll), but that is
+courtesy and not the mechanism: the app is code a visitor already has, and a
+button hidden by JavaScript is a button any ``curl`` can press anyway. What
+actually stops the write is :func:`web.auth.may_write`, consulted on every POST
+between "is there a session" and "may this origin write at all", and answered
+before a byte of the body has been read.
+
+Both accounts are opt-in and they are opt-in separately. No password at all is
+the old open mode; an owner password alone is the login exactly as it shipped,
+one box and no picker; both is the two accounts. There is no configuration in
+which the viewer password exists and the owner's does not -- :func:`_build_auth`
+refuses to start rather than serve a tracker nobody can drive.
+
 **The demo is code without data.** A public URL that answers every visitor with a
 password box says nothing about what is behind it, so ``/demo`` hands out the app
 itself -- and only the app. What it renders is fabricated in the browser
@@ -86,7 +108,7 @@ import argparse
 import json
 import os
 import sys
-from functools import partial
+from functools import lru_cache, partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -112,9 +134,12 @@ from web.api import (  # noqa: E402
     run_command,
 )
 from web.auth import (  # noqa: E402
+    OWNER,
+    VIEWER,
     Authenticator,
     load_or_create_secret,
     load_password_hash,
+    may_write,
     throttle_key,
 )
 
@@ -287,10 +312,87 @@ npm run build</pre>
 </body></html>
 """
 
+#: What each account is called on the login form, and what it gets you. The names
+#: are the vocabulary of a person's own tool rather than of software: the one who
+#: owns the hours, and the one who may look at them.
+_ACCOUNT_LABELS = {
+    OWNER: ("Owner", "Full control — start, pause and stop the day."),
+    VIEWER: ("Viewer", "Read-only — see the hours, change nothing."),
+}
+
+#: Where _login_page slots the account picker and the sentence above it. Sentinels
+#: and a replace(), rather than a format(): this page is mostly CSS and JavaScript,
+#: both of which are made of braces, and every one of them would have to be
+#: doubled to survive a format string. That is a lot of ways to break a page by
+#: touching its stylesheet, in exchange for nothing.
+_PICKER_SLOT = "<!--picker-->"
+_CAPTION_SLOT = "<!--caption-->"
+
+
+def _picker(accounts: Tuple[str, ...]) -> str:
+    """The account chooser, or a hidden field when there is nothing to choose.
+
+    With one account configured there is no question to ask, so the form is the
+    single password box it has always been -- and the account still travels, as a
+    hidden field, so that the request the browser sends names its account either
+    way and the server has one shape of body to read rather than two.
+
+    With two, they are radios: the choice is between named things, one is always
+    picked, and the browser gives arrow keys and a group label for free. They are
+    styled as a segmented control (see `.who` in the page's CSS), which is what
+    two radios that are the same size and mutually exclusive want to look like.
+
+    The role names go into the HTML unescaped, and may: they are :data:`ROLES`,
+    module constants in this repository, and nothing a request carries reaches
+    here. `data-note` carries each account's explanation with the option it
+    belongs to, so the script that shows it needs no second copy of the text.
+    """
+    if len(accounts) == 1:
+        return f'<input type="hidden" name="account" value="{accounts[0]}">'
+
+    options = "".join(
+        f'<label class="who__opt">'
+        f'<input type="radio" name="account" value="{role}" '
+        f'data-note="{_ACCOUNT_LABELS[role][1]}"{" checked" if index == 0 else ""}>'
+        f"<span>{_ACCOUNT_LABELS[role][0]}</span>"
+        f"</label>"
+        for index, role in enumerate(accounts)
+    )
+    return (
+        f'<div class="who" role="radiogroup" aria-label="Account">{options}</div>'
+        f'<p class="who__note" id="who-note"></p>'
+    )
+
+
+@lru_cache(maxsize=None)
+def _login_page(accounts: Tuple[str, ...]) -> str:
+    """The login form as it stands for ``accounts``, built once and kept.
+
+    Cached because it is a constant per configuration -- the accounts are fixed at
+    startup and this is several kilobytes of it -- and because the page it returns
+    is what *every* anonymous request is answered with, which on a public URL is
+    every request that is not yours. Rebuilding it per hit would be a few
+    microseconds of string work done for no one's benefit; there are at most two
+    distinct pages this can ever produce.
+    """
+    caption = (
+        "Enter the password to continue."
+        if len(accounts) == 1
+        else "Choose an account and enter its password."
+    )
+    return _LOGIN_TEMPLATE.replace(_PICKER_SLOT, _picker(accounts)).replace(
+        _CAPTION_SLOT, caption
+    )
+
+
 #: Shown at every path when a password is configured and the request is not
 #: logged in. It is served *instead of* the app: a browser without the password
 #: receives this form and none of the tracker's data. The form posts JSON to
 #: /api/login and, on success, reloads to receive the app it could not see before.
+#:
+#: A template, not a page: _login_page fills the two slots above, because what it
+#: asks for depends on how many accounts are configured. Everything else about it
+#: is fixed.
 #:
 #: It is written out by hand rather than built, because it must be renderable
 #: before the bundle is -- but it is not a plain page for that. It is the front
@@ -302,7 +404,7 @@ npm run build</pre>
 #: the gradient. Without a build (or without the font, which the licence keeps
 #: out of the repository) the page still stands -- Georgia, and the paper with no
 #: wash on it -- because everything load-bearing here is CSS, not an asset.
-_LOGIN_PAGE = """<!doctype html>
+_LOGIN_TEMPLATE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
@@ -349,11 +451,34 @@ _LOGIN_PAGE = """<!doctype html>
  h1{margin:0;font-size:2rem;font-weight:600;letter-spacing:-.02em;line-height:1.1}
  p.dim{color:var(--ink-2);margin:.35rem 0 2rem;font-size:.85rem}
  form{display:flex;flex-direction:column;gap:.75rem}
- input{width:100%;min-height:44px;padding:.5rem .7rem;background:var(--card);
-   border:1px solid var(--rule);border-radius:6px;color:var(--ink);
-   font:inherit;font-size:.95rem}
+ input[type=password]{width:100%;min-height:44px;padding:.5rem .7rem;
+   background:var(--card);border:1px solid var(--rule);border-radius:6px;
+   color:var(--ink);font:inherit;font-size:.95rem}
  input::placeholder{color:var(--ink-2)}
  input:focus{outline:none;border-color:var(--work)}
+ /* The account picker: two radios wearing the segmented control they describe.
+    The input itself is made invisible rather than `display:none`, because a
+    display:none radio is unfocusable — and these are a radiogroup, where the
+    arrow keys are how you are meant to move between the options. It keeps its
+    box, its focus and its keyboard; the label's span is what you see. */
+ .who{display:flex;gap:.5rem;margin:0}
+ .who__opt{position:relative;flex:1}
+ .who__opt input{position:absolute;inset:0;width:100%;height:100%;margin:0;
+   opacity:0;cursor:pointer}
+ .who__opt span{display:flex;align-items:center;justify-content:center;
+   min-height:44px;padding:.55rem .9rem;background:var(--card);
+   border:1px solid var(--rule);border-radius:6px;color:var(--ink-2);
+   font-size:.72rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+   transition:border-color .12s ease,color .12s ease,background-color .12s ease}
+ .who__opt input:hover+span{color:var(--ink)}
+ /* The chosen one is lit the way the primary button is, because it is the same
+    statement: this is the thing about to happen. The pink is written out rather
+    than mixed from var(--work), as the error box's is a few rules down and for
+    the same reason: a colour every browser here can already paint. */
+ .who__opt input:checked+span{border-color:var(--work);color:var(--ink);
+   background-color:rgba(236,72,153,.12)}
+ .who__opt input:focus-visible+span{outline:2px solid var(--work);outline-offset:3px}
+ .who__note{margin:0;min-height:1.5em;font-size:.75rem;color:var(--ink-2)}
  /* The same two buttons the app has: one filled thing you came to press, and
     one that is outlined because it is the lesser errand. */
  .btn{display:inline-flex;align-items:center;justify-content:center;
@@ -384,8 +509,9 @@ _LOGIN_PAGE = """<!doctype html>
 <body>
  <main>
    <h1>Work Tracker</h1>
-   <p class="dim">Enter the password to continue.</p>
+   <p class="dim"><!--caption--></p>
    <form id="f">
+     <!--picker-->
      <input id="pw" type="password" name="password" placeholder="Password"
             autocomplete="current-password" autofocus required>
      <button id="go" type="submit" class="btn btn--go">Sign in</button>
@@ -397,13 +523,31 @@ _LOGIN_PAGE = """<!doctype html>
  </main>
 <script>
  const f=document.getElementById('f'),pw=document.getElementById('pw'),
-       go=document.getElementById('go'),err=document.getElementById('err');
+       go=document.getElementById('go'),err=document.getElementById('err'),
+       note=document.getElementById('who-note');
+
+ // Say what the account you have picked will get you, from the option itself —
+ // `data-note` keeps each sentence next to the radio it describes, so this page
+ // holds one copy of the text and not two. Absent when there is only one
+ // account, there being no choice to explain.
+ if(note){
+   const say=()=>{const on=f.querySelector('input[name=account]:checked');
+                  note.textContent=on?on.dataset.note:''};
+   for(const radio of f.querySelectorAll('input[name=account]')){
+     radio.addEventListener('change',()=>{say();pw.focus()});
+   }
+   say();
+ }
+
  f.addEventListener('submit',async e=>{
    e.preventDefault();err.textContent='';go.disabled=true;
    try{
+     // `f.account` is the hidden field or the radios, and either way its value
+     // is the account being signed in to. The server is told which; it does not
+     // try the passwords in turn to find out.
      const r=await fetch('/api/login',{method:'POST',
        headers:{'Content-Type':'application/json'},
-       body:JSON.stringify({password:pw.value})});
+       body:JSON.stringify({account:f.account.value,password:pw.value})});
      if(r.ok){location.reload();return}
      const b=await r.json().catch(()=>null);
      err.textContent=(b&&b.error)||('Sign in failed ('+r.status+')');
@@ -443,6 +587,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 (name mandated by BaseHTTPRequestHandler)
         """Route a GET: the two read endpoints, or the built UI.
 
+        Both accounts read alike, so there is no role check here -- a viewer's GET
+        and an owner's GET are the same request and get the same answer. The whole
+        of the difference between them is on the POST side.
+
         When a password is configured, an unauthenticated GET never reaches any
         of that. An API path is answered with a bare 401. The demo, and the
         assets that draw it, are served (:func:`public_path`) -- they are code,
@@ -455,26 +603,41 @@ class ViewerHandler(BaseHTTPRequestHandler):
         :data:`DEMO_PATH` and by no other spelling.
         """
         path = urlparse(self.path).path
+        # With no login configured the server is open, and open means the owner's
+        # powers: there is no password to have, so there is nobody to withhold
+        # them from. That is the loopback tool as it always was.
+        role = self._session_role() if self._auth is not None else OWNER
 
-        if self._auth is not None and not self._authenticated():
+        if role is None:
             if path.startswith("/api/"):
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "authentication required"})
                 return
             public = public_path(path)
             if public is None:
-                self._send_html(HTTPStatus.OK, _LOGIN_PAGE)
+                assert self._auth is not None  # role is None only when it is not
+                self._send_html(HTTPStatus.OK, _login_page(self._auth.accounts))
             else:
                 self._serve_static(public, index_fallback=False)
             return
 
         if path == "/api/status":
-            # Whether there is a session to end is this server's fact, not the
-            # tracker's: web/api.py is a pure function of a Storage and has never
-            # heard of a password. So the flag is stapled on here, in the adapter
-            # that does know, rather than threaded down into the payload builder.
-            # It rides on the status poll because the UI needs it before its first
-            # paint, and status is the request it was already making.
-            self._serve_json(build_status_payload, "status", extra={"login": self._auth is not None})
+            # Whether there is a session to end, and what this one may do, are
+            # this server's facts, not the tracker's: web/api.py is a pure
+            # function of a Storage and has never heard of a password. So they are
+            # stapled on here, in the adapter that does know, rather than threaded
+            # down into the payload builder. They ride on the status poll because
+            # the UI needs them before its first paint, and status is the request
+            # it was already making.
+            #
+            # `role` is what the app draws itself from -- a viewer is shown no
+            # buttons. It is not what *stops* a viewer writing: do_POST is, and it
+            # would refuse the write whatever this page had been persuaded to
+            # render. Telling the UI is courtesy; the refusal is the mechanism.
+            self._serve_json(
+                build_status_payload,
+                "status",
+                extra={"login": self._auth is not None, "role": role},
+            )
         elif path == "/api/sessions":
             self._serve_json(build_sessions_payload, "sessions")
         elif path.startswith("/api/"):
@@ -485,12 +648,19 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 (name mandated by BaseHTTPRequestHandler)
         """Route a POST: one write command, named by the path.
 
-        The two failure kinds are kept apart deliberately. A :class:`BadRequest`
-        is the *server* refusing to pass the request on -- a foreign origin, a
-        body that is not JSON, a path that is not a command. A
-        :class:`~tracker.utils.TrackerError` is the *tracker* refusing the command
-        itself, and it carries a message written to be read by a person ("the
-        session is already paused"), which is exactly what the UI puts on screen.
+        Three failure kinds, kept apart deliberately. A 401 or a 403 is the
+        *login* refusing -- you have no session, or the one you have may only
+        look. A :class:`BadRequest` is the *server* refusing to pass the request
+        on -- a foreign origin, a body that is not JSON, a path that is not a
+        command. A :class:`~tracker.utils.TrackerError` is the *tracker* refusing
+        the command itself, and it carries a message written to be read by a
+        person ("the session is already paused"), which is exactly what the UI
+        puts on screen.
+
+        The order they are checked in is the order they get more expensive, and
+        that is not a coincidence: a viewer's write is turned away by
+        :func:`~web.auth.may_write` before its origin is examined, before its body
+        is read off the socket, and a long way before the tracker is opened.
         """
         path = urlparse(self.path).path
 
@@ -500,7 +670,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         # Login and logout only exist when a password is configured, and login
         # is the one write that runs *before* the session check -- it is how you
-        # get a session in the first place. Everything past here needs one.
+        # get a session in the first place. Logout needs no role either: ending
+        # your own session is not a power, and a viewer has as much right to
+        # leave as you do. Everything past here needs a session, and a session
+        # that is allowed to change something.
         if self._auth is not None:
             if path == "/api/login":
                 self._handle_login()
@@ -508,8 +681,22 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if path == "/api/logout":
                 self._handle_logout()
                 return
-            if not self._authenticated():
+
+            role = self._session_role()
+            if role is None:
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "authentication required"})
+                return
+            if not may_write(role):
+                # The read-only account, refused. A 403 and not a 401, and the
+                # difference is the whole message: 401 means "who are you", and
+                # re-logging-in would fix it. This will not be fixed by logging in
+                # again as the same account, and saying 401 would invite exactly
+                # that. The UI never puts a viewer in front of this button, so
+                # anyone reading this sentence went looking for it.
+                self._send_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "this account may only look, not change anything"},
+                )
                 return
 
         try:
@@ -585,13 +772,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     # -- auth ---------------------------------------------------------------
 
-    def _authenticated(self) -> bool:
-        """True if this request carries a session cookie the server signed.
+    def _session_role(self) -> Optional[str]:
+        """The role this request's cookie proves, or ``None`` if it proves none.
 
         Only called when :attr:`_auth` is set, so the attribute access is safe.
         """
         assert self._auth is not None
-        return self._auth.is_authenticated(self.headers.get("Cookie"))
+        return self._auth.role_for(self.headers.get("Cookie"))
 
     def _client_key(self) -> str:
         """The key the login throttle counts failures against -- the client IP.
@@ -604,14 +791,24 @@ class ViewerHandler(BaseHTTPRequestHandler):
         return throttle_key(peer, self.headers.get("X-Forwarded-For"))
 
     def _handle_login(self) -> None:
-        """Check a password and, if it is right, hand back a session cookie.
+        """Check an account's password and, if it is right, hand back a session.
 
         The order is deliberate. The throttle is consulted *first*, so a locked-out
         client is turned away with a 429 before its guess is ever compared -- the
-        lockout cannot be worn down by continuing to guess. Only then is the
-        origin checked and the body read, and only then the password. A wrong
-        password is a 401 with a message written for the person, never a hint at
-        how close they were; every wrong answer is the same wrong answer.
+        lockout cannot be worn down by continuing to guess, nor by turning to the
+        other account, because the throttle counts clients and not accounts (see
+        :class:`~web.auth.LoginThrottle`). Only then is the origin checked and the
+        body read, and only then the password.
+
+        The body names its account. A missing ``account`` key means the owner --
+        that is the body the single-account login form has always sent, and the
+        one a script or a ``curl`` in someone's notes still sends. It is not a way
+        in: it still needs the owner's password, exactly as it did before there
+        was anything else to be.
+
+        A wrong password is a 401 with a message written for the person, never a
+        hint at how close they were; every wrong answer is the same wrong answer,
+        for either account.
         """
         assert self._auth is not None
         client = self._client_key()
@@ -632,7 +829,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(refusal.status, {"error": refusal.message})
             return
 
-        if not self._auth.verify_login(body.get("password")):
+        role = self._auth.verify_login(body.get("account", OWNER), body.get("password"))
+        if role is None:
             self._auth.throttle.record_failure(client)
             self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "wrong password"})
             return
@@ -640,8 +838,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self._auth.throttle.record_success(client)
         self._send_json(
             HTTPStatus.OK,
-            {"ok": True},
-            extra_headers={"Set-Cookie": self._auth.session_cookie()},
+            {"ok": True, "role": role},
+            extra_headers={"Set-Cookie": self._auth.session_cookie(role)},
         )
 
     def _handle_logout(self) -> None:
@@ -682,8 +880,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
         terminal and a hung spinner in the browser.
 
         ``extra`` is merged into the payload afterwards: it carries what the
-        *server* knows and the payload builder does not, which today is the one
-        field ``login``.
+        *server* knows and the payload builder does not, which today is whether
+        there is a login at all (``login``) and which account is asking
+        (``role``).
         """
         try:
             payload = build(self._storage)
@@ -841,7 +1040,12 @@ def serve(
 
     print(f"work-tracker viewer -> http://{host}:{port}")
     print(f"data directory      -> {root}")
-    print(f"authentication      -> {'password required' if auth else 'none (open)'}")
+    # Which accounts exist is worth saying out loud: "owner" alone and
+    # "owner, viewer" are two different things to have put on a public URL, and
+    # the difference is a password you have handed to somebody else.
+    print(
+        f"authentication      -> {'password required: ' + ', '.join(auth.accounts) if auth else 'none (open)'}"
+    )
     if allow_origins:
         print(f"writes allowed from -> {', '.join(sorted(allow_origins))} (and this machine)")
     if host not in _LOCAL_ORIGINS and auth is None:
@@ -907,10 +1111,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=Path,
         metavar="PATH",
         help=(
-            "require a login. PATH holds a password hash from "
+            "require a login. PATH holds the owner's password hash from "
             "'python3 -m web.auth --write PATH'. The environment variable "
             "WORK_TRACKER_PASSWORD_HASH is used instead if set. With neither, the "
             "viewer runs open, as before -- which is only safe on loopback."
+        ),
+    )
+    parser.add_argument(
+        "--viewer-password-file",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "also offer a read-only account with its own password. PATH holds its "
+            "hash, from 'python3 -m web.auth --account viewer --write PATH'; the "
+            "environment variable WORK_TRACKER_VIEWER_PASSWORD_HASH is used "
+            "instead if set. Someone signed in with it sees the live session and "
+            "the whole history and can change none of it. Needs --password-file "
+            "as well: a tracker nobody can drive is not a configuration."
         ),
     )
     parser.add_argument(
@@ -927,7 +1144,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     allow_origins = frozenset(_host_of(origin) for origin in args.allow_origin)
     root = args.root.expanduser()
 
-    auth = _build_auth(root, args.password_file, cookie_secure=not args.cookie_insecure)
+    auth = _build_auth(
+        root,
+        args.password_file,
+        args.viewer_password_file,
+        cookie_secure=not args.cookie_insecure,
+    )
     if auth is _AUTH_MISCONFIGURED:
         return 1
 
@@ -947,19 +1169,28 @@ _AUTH_MISCONFIGURED = object()
 
 
 def _build_auth(
-    root: Path, password_file: Optional[Path], cookie_secure: bool
+    root: Path,
+    password_file: Optional[Path],
+    viewer_password_file: Optional[Path],
+    cookie_secure: bool,
 ) -> Any:
-    """Assemble the login guard from the environment and the ``--password-file``.
+    """Assemble the login guard from the environment and the password files.
 
-    Fails closed: if ``--password-file`` is given but names nothing readable, this
-    returns the :data:`_AUTH_MISCONFIGURED` sentinel so the server refuses to
-    start, rather than falling back to no password and putting an open viewer on
-    the network the operator was trying to lock down. With no password configured
-    at all it returns ``None`` -- the deliberate, documented open mode.
+    Fails closed, three times over. If either ``--password-file`` is given but
+    names nothing readable, this returns the :data:`_AUTH_MISCONFIGURED` sentinel
+    so the server refuses to start, rather than falling back to no password and
+    putting an open viewer on the network the operator was trying to lock down --
+    or, for the viewer file, quietly serving a login with the read-only account
+    silently missing from it. And a viewer password with no owner password is
+    refused outright: it would be a tracker that can be watched and not driven,
+    which is nobody's intention and worth saying so rather than starting.
+
+    With no password configured at all it returns ``None`` -- the deliberate,
+    documented open mode.
     """
-    env_hash = os.environ.get("WORK_TRACKER_PASSWORD_HASH")
-    password_hash = load_password_hash(env_hash, password_file)
-
+    password_hash = load_password_hash(
+        os.environ.get("WORK_TRACKER_PASSWORD_HASH"), password_file
+    )
     if password_file is not None and password_hash is None:
         print(
             f"error: --password-file {password_file} has no password hash in it.\n"
@@ -968,12 +1199,37 @@ def _build_auth(
         )
         return _AUTH_MISCONFIGURED
 
+    viewer_hash = load_password_hash(
+        os.environ.get("WORK_TRACKER_VIEWER_PASSWORD_HASH"), viewer_password_file
+    )
+    if viewer_password_file is not None and viewer_hash is None:
+        print(
+            f"error: --viewer-password-file {viewer_password_file} has no password hash in it.\n"
+            f"       create one with: python3 -m web.auth --account {VIEWER} "
+            f"--write {viewer_password_file}",
+            file=sys.stderr,
+        )
+        return _AUTH_MISCONFIGURED
+
     if password_hash is None:
+        if viewer_hash is not None:
+            print(
+                "error: a viewer password is configured but an owner password is not.\n"
+                "       The viewer account may only look, so this would serve a tracker\n"
+                "       nobody can start or stop. Set an owner password too:\n"
+                "         python3 -m web.auth --write .password",
+                file=sys.stderr,
+            )
+            return _AUTH_MISCONFIGURED
         return None
+
+    hashes = {OWNER: password_hash}
+    if viewer_hash is not None:
+        hashes[VIEWER] = viewer_hash
 
     secret = load_or_create_secret(root / ".session_secret")
     return Authenticator(
-        password_hash=password_hash,
+        password_hashes=hashes,
         secret=secret,
         cookie_secure=cookie_secure,
     )

@@ -364,6 +364,17 @@ html::before {
   color: var(--ink-2);
 }
 
+/* The same line, for an account that may only read it. It matches .task__input's
+   metrics exactly — the read-only page and the writable one must not shuffle a
+   pixel between them — but it is a span, so there is no caret, no hover rule and
+   nothing to click. */
+.task__text {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0 0.25rem;
+  font-size: 0.95rem;
+}
+
 .task__input:hover {
   border-bottom-color: var(--rule);
 }
