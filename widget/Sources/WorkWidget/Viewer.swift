@@ -1,8 +1,16 @@
 // The button that opens the web viewer.
 //
-// The viewer needs a server, and a button that opened a dead URL because you had
-// not started one would be a button that lies. So this starts it on demand, and
-// only then opens the browser.
+// There are two viewers it may open, and it picks without being asked. When the
+// widget is driving a VM, that VM already serves the viewer on a public URL --
+// the same one the browser uses -- so the button just opens it; there is nothing
+// to start. Configure it with the hosted address:
+//
+//   defaults write com.work-tracker.widget WorkTrackerViewerURL https://tracker.d-m-g.dev
+//
+// With nothing configured the widget is purely local, and the viewer needs a
+// server. A button that opened a dead URL because you had not started one would
+// be a button that lies, so this starts it on demand, and only then opens the
+// browser.
 //
 // It starts one at most, and only when nothing is answering: if you already have
 // `python3 web/server.py` running in a terminal, the widget uses yours and keeps
@@ -31,8 +39,26 @@ final class Viewer {
         URL(string: "http://127.0.0.1:\(port)")!
     }
 
+    /// The hosted viewer, if one is configured -- the public address the VM
+    /// serves. Read the same two ways the remote switch is (`TrackerClient`):
+    /// the `WORK_TRACKER_VIEWER_URL` environment variable, or the
+    /// `WorkTrackerViewerURL` user default.
+    private var hosted: URL? {
+        let configured = ProcessInfo.processInfo.environment["WORK_TRACKER_VIEWER_URL"]
+            ?? UserDefaults.standard.string(forKey: "WorkTrackerViewerURL")
+        guard let configured, !configured.isEmpty else { return nil }
+        return URL(string: configured)
+    }
+
     /// Returns nil on success, or a one-line complaint the widget can show.
     func open() async -> String? {
+        // A hosted viewer is always up -- it is someone else's server -- so there
+        // is nothing to start and nothing to wait for. Just open it.
+        if let hosted {
+            NSWorkspace.shared.open(hosted)
+            return nil
+        }
+
         if await isAnswering() {
             NSWorkspace.shared.open(url)
             return nil

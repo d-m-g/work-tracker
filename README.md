@@ -595,6 +595,78 @@ or timezones and cannot drift away from what the CLI reports.
 
 ---
 
+## Driving a VM from the widget and the Shortcuts
+
+The viewer lets you *reach* the tracker from anywhere. This lets you *drive* it
+from anywhere -- the menu-bar widget and the keyboard Shortcuts on your Mac can
+control the tracker running on a VM (the one the web viewer reads), so a `⌘F8` at
+your desk and a tap on the web from your phone move the same clock.
+
+It is off by default, and it needs no new code path to be right: when a VM is
+configured, the CLI runs *the very same* `tracker.py` on the VM over SSH and
+relays what it said. `--json status` there is `--json status` here. There is no
+second implementation to drift, because there isn't a second implementation.
+
+### The switch: one environment variable
+
+| Variable | Meaning |
+| --- | --- |
+| `WORK_TRACKER_SSH` | The SSH destination, e.g. `ubuntu@203.0.113.10`. **Unset means local, exactly as before** -- this is the whole switch. |
+| `WORK_TRACKER_SSH_KEY` | Identity file (optional). |
+| `WORK_TRACKER_SSH_PATH` | The repo directory on the VM (default `work-tracker`). |
+
+```sh
+# drive the VM from this shell
+export WORK_TRACKER_SSH=ubuntu@203.0.113.10
+export WORK_TRACKER_SSH_KEY=~/keys/tracker
+python3 tracker.py toggle       # runs on the VM; falls back to local if it can't
+```
+
+**The widget** reads the same settings from `defaults`, the way it already learns
+the data directory:
+
+```sh
+defaults write com.work-tracker.widget WorkTrackerRemote    ubuntu@203.0.113.10
+defaults write com.work-tracker.widget WorkTrackerRemoteKey ~/keys/tracker
+# then restart the widget
+```
+
+**The Shortcuts** bake it in at build time -- rebuild them with `--ssh` and
+re-import:
+
+```sh
+python3 shortcuts/build_shortcuts.py --ssh ubuntu@203.0.113.10 --ssh-key ~/keys/tracker
+```
+
+### Offline fallback, and folding it back in
+
+Lose the network and nothing stops: the command runs against your local files
+instead, exactly as it did before any of this existed, and a `.sync_pending`
+marker is dropped. The next time the VM is reachable, the two are reconciled
+**once**, before the command runs:
+
+* **Archived sessions union in both directions** and are never overwritten --
+  anything you recorded offline is pushed up, anything the VM gained (driven from
+  your phone, say) is pulled down.
+* **The live session** is settled by whichever side has the more recent activity.
+  In the rare case where both sides held a *different* live session at once, the
+  loser is **stashed under `conflicts/`, never deleted**, and said out loud.
+
+### Kept cheap on purpose
+
+The widget polls once a second; driving that remotely would be a poor trade if
+each poll paid for a fresh connection or a file sync. It does neither:
+
+* a **persistent, multiplexed SSH connection** is reused across polls, so a poll
+  is one round trip, not a handshake;
+* **status polls sync nothing** -- reconciliation happens only on reconnection,
+  and the small `current.json` is refreshed only after a *write*, a few times a
+  day rather than once a second;
+* while offline, a short **cooldown** answers from local immediately instead of
+  each poll waiting out the connection timeout, re-probing every few seconds.
+
+---
+
 ## JSON format
 
 ### While a session is running: `current.json`

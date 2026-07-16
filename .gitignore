@@ -9,6 +9,11 @@ __pycache__/
 /widget/.build/
 /widget/WorkWidget.app/
 
+# Zodiak, the widget's copy. As with web/ui/public/fonts, the binary is kept out
+# of this public repo -- its licence (web/ui/public/fonts/FFL.txt section 02)
+# forbids uploading it to a public server. make-app.sh bundles it into the .app.
+/widget/fonts/
+
 # Session data, not source. The repository is also the default data directory
 # (WORK_TRACKER_HOME), so the live session and its archives land here -- but
 # your working hours are yours, and they are not part of the program.
@@ -19,6 +24,14 @@ __pycache__/
 # SSH keys and any other deploy secrets kept alongside the repo for convenience.
 # The private key to the server lives here; it must never be committed.
 /.secrets/
+
+# Remote-driving state, when the CLI drives a VM over SSH. Markers for "a
+# reconcile is owed" and "the VM was just unreachable", and the conflicts/ folder
+# where a genuinely two-sided live-session clash is stashed. All local runtime
+# state, none of it source.
+/.sync_pending
+/.offline_since
+/conflicts/
 
 # Login secrets, when the viewer runs with a password. The signing secret and
 # the password hash live in the data directory (again, the repo by default);

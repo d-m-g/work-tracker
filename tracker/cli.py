@@ -27,6 +27,18 @@ from pathlib import Path
 from typing import Final, TextIO
 
 from .models import ActiveSession, Pause, SessionState
+from .remote import (
+    SSH_UNREACHABLE,
+    clear_offline,
+    clear_pending,
+    is_pending,
+    mark_pending,
+    note_offline,
+    offline_recent,
+    refresh_local,
+    remote_from_env,
+    synchronise,
+)
 from .storage import Storage
 from .tracker import Status, ToggleAction, ToggleResult, WorkTracker
 from .utils import TrackerError, format_duration, format_timestamp
@@ -367,12 +379,25 @@ def main(
     out = out if out is not None else sys.stdout
     err = err if err is not None else sys.stderr
 
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
 
     root: Path = args.root if args.root is not None else default_root()
-    tracker = WorkTracker(Storage(root))
 
+    # With a remote configured the command runs on the VM; without one, or when
+    # the VM cannot be reached, it runs here exactly as it always has.
+    remote = remote_from_env()
+    if remote is not None:
+        return _run_remote(remote, root, raw_argv, args, out, err)
+    return _run_local(root, args, out, err)
+
+
+def _run_local(
+    root: Path, args: argparse.Namespace, out: TextIO, err: TextIO
+) -> int:
+    """Run one command against the local files -- the original behaviour."""
+    tracker = WorkTracker(Storage(root))
     handler = _COMMANDS[args.command]
     try:
         return handler(tracker, args, out)  # type: ignore[operator]
@@ -383,3 +408,83 @@ def main(
     except KeyboardInterrupt:  # pragma: no cover - interactive only
         print("interrupted", file=err)
         return EXIT_ERROR
+
+
+def _strip_root(raw_argv: Sequence[str]) -> list[str]:
+    """Drop any ``--root`` from the arguments forwarded to the VM.
+
+    ``--root`` names a directory on *this* machine; the VM has its own data
+    directory and must not be pointed at a path that means nothing there. Every
+    other argument -- ``--json``, the command, a task with spaces in it -- is
+    forwarded untouched.
+    """
+    forwarded: list[str] = []
+    skip = False
+    for token in raw_argv:
+        if skip:
+            skip = False
+            continue
+        if token == "--root":
+            skip = True  # also drop its value, the next token
+            continue
+        if token.startswith("--root="):
+            continue
+        forwarded.append(token)
+    return forwarded
+
+
+def _run_remote(
+    remote: object,
+    root: Path,
+    raw_argv: Sequence[str],
+    args: argparse.Namespace,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """Run one command on the VM, falling back to local if it cannot be reached.
+
+    ``status`` is a read and needs no reconciliation; every other command is a
+    write. On reconnection -- the first command after an offline stretch -- the
+    owed merge runs once before the command, and after a successful online write
+    the local files are refreshed so a later drop to offline resumes from the
+    right place.
+    """
+    is_write = args.command != "status"
+
+    def fall_back_to_local() -> int:
+        """Run here and, for a write, remember to reconcile on reconnection."""
+        result = _run_local(root, args, out, err)
+        if is_write:
+            mark_pending(root)
+        return result
+
+    # Just failed to reach the VM? Don't pay the connect timeout again yet --
+    # answer from local at once. The cooldown re-probes on its own before long.
+    if offline_recent(root):
+        return fall_back_to_local()
+
+    # Reconnecting: fold in anything done offline before trusting the VM again.
+    # A failed sync means we are still offline, so note it and serve local.
+    if is_pending(root):
+        if synchronise(remote, root, err):  # type: ignore[arg-type]
+            clear_pending(root)
+            clear_offline(root)
+        else:
+            note_offline(root)
+            return fall_back_to_local()
+
+    exit_code, remote_out, remote_err = remote.run(_strip_root(raw_argv))  # type: ignore[attr-defined]
+
+    if exit_code == SSH_UNREACHABLE:
+        note_offline(root)
+        return fall_back_to_local()
+
+    # Online: relay exactly what the VM said, then keep local a warm mirror.
+    clear_offline(root)
+    if remote_out:
+        out.write(remote_out)
+    if remote_err:
+        err.write(remote_err)
+    if is_write and exit_code == EXIT_OK:
+        refresh_local(remote, root)  # type: ignore[arg-type]
+    return exit_code

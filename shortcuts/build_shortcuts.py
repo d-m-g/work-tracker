@@ -52,7 +52,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Final, List, Tuple
+from typing import Any, Dict, Final, List, Optional, Tuple
 
 #: The repository root: the parent of the directory holding this script.
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
@@ -88,13 +88,31 @@ def _shell_quote(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
 
 
-def _script(python: Path, command: str) -> str:
+def _remote_exports(remote: Optional[Dict[str, str]]) -> str:
+    """Shell ``export`` lines that switch the CLI to driving a VM, or nothing.
+
+    When ``remote`` is given, each Shortcut sets ``WORK_TRACKER_SSH`` (and, if
+    provided, the key and path) before invoking the CLI, so the very same
+    ``tracker.py`` drives the VM -- and falls back to local when it is offline.
+    Omit it and the Shortcuts stay purely local, exactly as before.
+    """
+    if not remote:
+        return ""
+    lines = [f"export WORK_TRACKER_SSH={_shell_quote(remote['destination'])}"]
+    if remote.get("key"):
+        lines.append(f"export WORK_TRACKER_SSH_KEY={_shell_quote(remote['key'])}")
+    if remote.get("path"):
+        lines.append(f"export WORK_TRACKER_SSH_PATH={_shell_quote(remote['path'])}")
+    return "\n".join(lines) + "\n"
+
+
+def _script(python: Path, command: str, remote: Optional[Dict[str, str]] = None) -> str:
     """Build the shell script for one Shortcut."""
     tracker = f"{_shell_quote(str(python))} {_shell_quote(str(REPO_ROOT / 'tracker.py'))}"
 
     # '2>&1' folds stderr into stdout so a refusal ("no session is in progress")
     # reaches the notification instead of vanishing into a log nobody reads.
-    return f"{tracker} {command} 2>&1"
+    return f"{_remote_exports(remote)}{tracker} {command} 2>&1"
 
 
 def _shell_script_action(script: str, output_uuid: str) -> Dict[str, Any]:
@@ -145,13 +163,15 @@ def _notification_action(title: str, output_uuid: str) -> Dict[str, Any]:
     }
 
 
-def build_shortcut(python: Path, command: str, title: str) -> Dict[str, Any]:
+def build_shortcut(
+    python: Path, command: str, title: str, remote: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
     """Assemble the full plist document for one Shortcut."""
     output_uuid = str(uuid.uuid4())
 
     return {
         "WFWorkflowActions": [
-            _shell_script_action(_script(python, command), output_uuid),
+            _shell_script_action(_script(python, command, remote), output_uuid),
             _notification_action(title, output_uuid),
         ],
         "WFWorkflowClientVersion": "1462.2",
@@ -215,6 +235,26 @@ def main(argv: List[str] | None = None) -> int:
         default=Path(__file__).resolve().parent,
         help="where to write the .shortcut files (default: alongside this script)",
     )
+    parser.add_argument(
+        "--ssh",
+        metavar="DEST",
+        help=(
+            "drive a VM instead of local files: the SSH destination the Shortcuts "
+            "run tracker.py on, e.g. ubuntu@203.0.113.10. Falls back to local when "
+            "the VM is unreachable. Omit for the original, purely-local Shortcuts."
+        ),
+    )
+    parser.add_argument(
+        "--ssh-key",
+        metavar="PATH",
+        help="identity file for --ssh (optional; whatever ssh would use otherwise)",
+    )
+    parser.add_argument(
+        "--ssh-path",
+        metavar="DIR",
+        default="work-tracker",
+        help="the repo directory on the VM (default: work-tracker)",
+    )
     args = parser.parse_args(argv)
 
     python: Path = args.python.expanduser()
@@ -222,11 +262,17 @@ def main(argv: List[str] | None = None) -> int:
         print(f"error: no interpreter at {python}", file=sys.stderr)
         return 1
 
+    remote: Optional[Dict[str, str]] = None
+    if args.ssh:
+        remote = {"destination": args.ssh, "path": args.ssh_path}
+        if args.ssh_key:
+            remote["key"] = str(Path(args.ssh_key).expanduser())
+
     output_dir: Path = args.output_dir.expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for name, command, title in SHORTCUTS:
-        document = build_shortcut(python, command, title)
+        document = build_shortcut(python, command, title, remote)
 
         # The signing tool identifies its input by extension and rejects
         # anything not named '.shortcut', so the unsigned file must already
@@ -243,6 +289,10 @@ def main(argv: List[str] | None = None) -> int:
 
     print(f"\nInterpreter: {python}")
     print(f"Repository:  {REPO_ROOT}")
+    if remote:
+        print(f"Drives VM:   {remote['destination']} (falls back to local when offline)")
+    else:
+        print("Drives:      local files (pass --ssh to drive a VM)")
     print("\nDouble-click each .shortcut to add it to the Shortcuts app.")
     return 0
 

@@ -73,6 +73,13 @@ struct TrackerClient {
     /// across Homebrew upgrades and clean installs.
     let python: URL
 
+    /// The environment every `tracker.py` is spawned with. It carries the
+    /// remote-driving switch: when a VM is configured, the CLI drives it over SSH
+    /// (and falls back to local when it cannot be reached); when nothing is
+    /// configured, this is just our own environment and the widget reads and
+    /// writes local files exactly as before. See ``subprocessEnvironment()``.
+    let environment: [String: String]
+
     var script: URL { root.appendingPathComponent("tracker.py") }
 
     // MARK: - locating the tracker
@@ -88,14 +95,56 @@ struct TrackerClient {
     static func locate() throws -> TrackerClient {
         let python = URL(fileURLWithPath: "/usr/bin/python3")
 
+        let environment = subprocessEnvironment()
         for candidate in candidateRoots() {
             let root = URL(fileURLWithPath: (candidate as NSString).expandingTildeInPath)
             if FileManager.default.fileExists(atPath: root.appendingPathComponent("tracker.py").path) {
-                return TrackerClient(root: root, python: python)
+                return TrackerClient(root: root, python: python, environment: environment)
             }
         }
 
         throw TrackerError.notFound(candidateRoots().first ?? "the usual places")
+    }
+
+    /// Build the environment for the `tracker.py` subprocesses.
+    ///
+    /// Our own environment, plus two things. First, a guaranteed `PATH`: a `.app`
+    /// launched from Finder inherits almost none, and the CLI must be able to find
+    /// `ssh` and `rsync` to reach a VM. Second, the remote-driving switch: if a VM
+    /// is configured -- by the `WORK_TRACKER_SSH` environment variable, or the
+    /// `WorkTrackerRemote` user default, the same way the data directory is set --
+    /// the corresponding `WORK_TRACKER_SSH*` variables are passed through so the
+    /// CLI drives the VM. Configure nothing and none are set, so the CLI stays
+    /// purely local, exactly as before.
+    private static func subprocessEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+
+        let existingPath = environment["PATH"] ?? ""
+        if existingPath.isEmpty {
+            environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+
+        func configured(_ variable: String, _ defaultsKey: String) -> String? {
+            if let value = ProcessInfo.processInfo.environment[variable], !value.isEmpty {
+                return value
+            }
+            if let value = UserDefaults.standard.string(forKey: defaultsKey), !value.isEmpty {
+                return value
+            }
+            return nil
+        }
+
+        guard let destination = configured("WORK_TRACKER_SSH", "WorkTrackerRemote") else {
+            return environment  // no VM configured: purely local, as before.
+        }
+        environment["WORK_TRACKER_SSH"] = destination
+        if let key = configured("WORK_TRACKER_SSH_KEY", "WorkTrackerRemoteKey") {
+            environment["WORK_TRACKER_SSH_KEY"] = key
+        }
+        if let remotePath = configured("WORK_TRACKER_SSH_PATH", "WorkTrackerRemotePath") {
+            environment["WORK_TRACKER_SSH_PATH"] = remotePath
+        }
+        return environment
     }
 
     private static func candidateRoots() -> [String] {
@@ -171,6 +220,7 @@ struct TrackerClient {
         process.executableURL = python
         process.arguments = [script.path] + arguments
         process.currentDirectoryURL = root
+        process.environment = environment
 
         let stdout = Pipe()
         let stderr = Pipe()
