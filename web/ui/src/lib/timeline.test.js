@@ -51,13 +51,10 @@ describe('todayOf — a session that never left its day', () => {
     pauses: [[at(16, 10), at(16, 10, 30)]],
   })
 
-  it('is not cut, and counts itself', () => {
+  it('is not cut: today holds all of it', () => {
     const today = todayOf(session)
     assert.equal(today.startsEarlier, false)
     assert.equal(today.workedSeconds, 2.5 * 3600)
-    assert.equal(today.pausedSeconds, 30 * 60)
-    assert.equal(today.grossSeconds, 3 * 3600)
-    assert.equal(today.pauseCount, 1)
   })
 
   it('is drawn from the hour it began, not from midnight', () => {
@@ -106,9 +103,10 @@ describe('todayOf — a session that ran past midnight', () => {
   })
 })
 
-describe('todayOf — breaks are counted by the day they fall in', () => {
-  it('leaves last night\'s breaks to last night', () => {
-    // One break at 22:30 yesterday, one at 00:30 today.
+describe('todayOf — the breaks fall on the day they were taken', () => {
+  it('draws last night\'s breaks on last night, not on this morning', () => {
+    // One break at 22:30 yesterday, one at 00:30 today. Only the second is a hole
+    // in today's strip; the first is a hole in the strip the history draws.
     const session = live({
       start: at(16, 22),
       gross: 3 * HOUR,
@@ -117,30 +115,58 @@ describe('todayOf — breaks are counted by the day they fall in', () => {
         [at(17, 0, 30), at(17, 0, 45)],
       ],
     })
-    const today = todayOf(session)
-    assert.equal(today.pauseCount, 1)
-    assert.equal(today.pausedSeconds, 15 * 60)
+    assert.deepEqual(
+      todayOf(session).segments.map((s) => [s.kind, s.from, s.to]),
+      [
+        ['work', 0, 30],
+        ['pause', 30, 45],
+        ['work', 45, 60],
+      ],
+    )
+    assert.equal(daysOf([spillOf(session)])[0].breaks, 1)
   })
 
-  it('counts a break taken across the midnight on both sides of it', () => {
-    // 23:50 to 00:10: one break, and a real twenty minutes of each day.
+  it('splits a break taken across the midnight, and gives each day its half', () => {
+    // 23:50 to 00:10: one break, ten real minutes on each side of the date.
     const session = live({
       start: at(16, 22),
       gross: 3 * HOUR,
       pauses: [[at(16, 23, 50), at(17, 0, 10)]],
     })
-    assert.equal(todayOf(session).pauseCount, 1)
-    assert.equal(todayOf(session).pausedSeconds, 10 * 60)
+    const [first] = todayOf(session).segments
+    assert.deepEqual([first.kind, first.from, first.to], ['pause', 0, 10])
     assert.equal(daysOf([spillOf(session)])[0].breaks, 1)
   })
 
-  it('does not fold the open pause into the count, and holds the clock still', () => {
-    // Held since 23:40 and still held: nothing has been worked today at all.
+  it('holds the strip still while the session is held', () => {
+    // Held since 23:40 and still held: not one minute has been worked today, so
+    // there is no ink on today at all -- only the track showing through.
     const session = live({ start: at(16, 21), gross: 4 * HOUR, pauseStart: at(16, 23, 40) })
     const today = todayOf(session)
     assert.equal(today.workedSeconds, 0)
-    assert.equal(today.pauseCount, 0)
-    assert.equal(today.pausedSeconds, 60 * 60) // 00:00 to the 01:00 edge
+    assert.deepEqual(
+      today.segments.map((s) => [s.kind, s.from, s.to]),
+      [['pause', 0, 60]], // midnight to the 01:00 edge
+    )
+  })
+})
+
+describe('todayOf — the strip is the day, the clock is the session', () => {
+  // The card counts the session and draws the day, which is only a contradiction
+  // if you expect todayOf to be about the digits. It is not: it is about the ink.
+  const session = live({ start: at(16, 22), gross: 3.5 * HOUR })
+
+  it('leaves the session\'s own totals to the server, and reports only its own', () => {
+    // Everything the clock and the figures need is already on the status payload,
+    // computed once, server-side. The only number here is the one nothing else
+    // can supply: what the live session has put on *today*, which the history's
+    // total needs in order to count a row the archive has not got yet.
+    assert.deepEqual(Object.keys(todayOf(session)).sort(), [
+      'edge',
+      'segments',
+      'startsEarlier',
+      'workedSeconds',
+    ])
   })
 })
 

@@ -171,22 +171,28 @@ function todayBaseOf(session) {
 }
 
 /**
- * What the live session amounts to **today**, in the shape the card draws.
+ * Where the live session sits on the day it is **in now** — its shape, not its
+ * total.
  *
  * A session that began this morning is returned whole, which is nearly always
- * what happens: `startsEarlier` is false and every number is the session's own.
- * A session that began before the midnight it has since crossed is cut at it, and
- * what comes back is only the hours on this side — today's ink, on today's ruler,
- * starting from the left where it belongs.
+ * what happens. One that began before the midnight it has since crossed is cut at
+ * it, and what comes back is only the hours on this side: today's ink, on today's
+ * ruler, starting from the left where it belongs. The hours on the other side are
+ * not lost — `spillOf` hands them to the history, to be drawn on the day they
+ * were worked on.
  *
- * The hours on the other side are not lost, they are simply not *today*: they are
- * yesterday's, and `spillOf` hands them to the history to be drawn on the day they
- * were worked on. The two pieces still sum to the session.
+ * This is deliberately about the *strip* and not about the digits above it. The
+ * card's clock counts the session, all of it, across whatever midnights it has
+ * seen, because what it is there to answer is "how long have I been at this" and
+ * the answer does not become 0:00:00 because a date changed. The strip answers a
+ * different question — whereabouts in the day am I — and a day is where it can
+ * answer it, on the same ruler every row below it uses.
  *
- * The clock restarting at midnight is the point rather than a side-effect. It is
- * what the history has always said about a session like this, and what the archive
- * will say the moment you press Stop — so this is the same tracker before and
- * after, rather than one that rearranges the day under you when you finish it.
+ * `workedSeconds` is the one number here, and the card does not draw it: it is
+ * what the history's total needs to know in order to count a row that the server
+ * has not archived yet (see App). The rest of the figures on the card belong to
+ * the session and come straight from the server, which has already done that
+ * arithmetic and done it in one place.
  */
 export function todayOf(session) {
   const { start, end } = spanOf(session)
@@ -203,27 +209,14 @@ export function todayOf(session) {
         .map((block) => ({ ...block, from: Math.max(block.from, base) }))
     : blocksOf(session)
 
-  const total = (kind) =>
-    blocks
-      .filter((block) => block.kind === kind)
-      .reduce((sum, block) => sum + (block.to - block.from), 0)
-
-  const worked = total('work')
-  const paused = total('pause')
-
   return {
-    base,
     segments: blocks.map((block) => segment(block.kind, block.from, block.to, base)),
     edge: minutesOf(end, base),
-    workedSeconds: secondsOf(worked),
-    pausedSeconds: secondsOf(paused),
-    grossSeconds: secondsOf(worked + paused),
-    // Breaks that *finished*, and that touched today -- the open one is counted
-    // separately by the card, which says "+1 open" rather than folding it in. A
-    // break taken across midnight belongs to both days, exactly as the history
-    // counts it (`breaks` in daysOf), because that is one break in each day's
-    // account of itself.
-    pauseCount: (session.pauses ?? []).filter((pause) => toMs(pause.end) > base).length,
+    workedSeconds: secondsOf(
+      blocks
+        .filter((block) => block.kind === 'work')
+        .reduce((sum, block) => sum + (block.to - block.from), 0),
+    ),
     startsEarlier,
   }
 }

@@ -26,15 +26,23 @@ function Clock({ seconds, held }) {
 }
 
 /**
- * Today: what the tracker has to show for the day you are in.
+ * The session on the clock, and where it sits in the day.
  *
- * `today` is the live session cut to this day (lib/timeline.js) — nearly always
- * the whole of it, and after a midnight only this side. Every number on the card
- * comes from there rather than from `status`, so the card counts the same hours
- * its strip draws, and the same hours the history will show once the session is
- * archived. `status` is still what the card is *about*: the state, the task, the
- * buttons, and the moment it began, which is worth saying even when it was
- * yesterday.
+ * The card counts the *session* — every figure on it comes from `status`, which
+ * is the server's own arithmetic over the whole of it, across whatever midnights
+ * it has seen. That is what the clock is for: "how long have I been at this" does
+ * not become 0:00:00 because a date turned over while you were working.
+ *
+ * The strip is the one thing here that is about the *day*, and it has to be: it
+ * is drawn against the ruler every history row shares, and that ruler is a day.
+ * So `today` (lib/timeline.js) is the session cut to the day it is now in —
+ * nearly always the whole of it, and after a midnight only this side, the rest
+ * having gone to the history to be drawn on the night it was worked.
+ *
+ * Which leaves the clock and the strip measuring two different things on the same
+ * card, and the caption is where that is said out loud rather than left to be
+ * noticed: after a midnight it reads "worked this session", so the digits are not
+ * mistaken for the day the strip beneath them is drawing.
  */
 export default function LiveSession({ status, today, axis, busy, send, readOnly = false }) {
   if (!status) {
@@ -72,16 +80,17 @@ export default function LiveSession({ status, today, axis, busy, send, readOnly 
         </p>
       </header>
 
-      <Clock seconds={today.workedSeconds} held={held} />
+      <Clock seconds={status.workedSeconds} held={held} />
 
-      {/* The caption's first word is what the clock above it means, so it says
-          "today" exactly when that is not the same as "this session" — after a
-          midnight, when the digits hold this side of it and the session holds
-          both. The rest says where the session actually began, which on such a
-          night is the thing the clock cannot tell you: 0:00:00 worked and held
-          since 23:40 is a sentence about two days, and it should read like one. */}
+      {/* The caption says which of the two this card is measuring, and it only
+          has to once a session has crossed a midnight — before that the session
+          *is* today and the distinction has nothing to mark. After it, the digits
+          are the session's and the strip below is the day's, so the first words
+          say "this session" and the last say where it began. A reader who takes
+          1:36:19 for a figure about today would be reading it wrong, and would be
+          right to: nothing else on the card says otherwise. */}
       <p className="live__caption">
-        {today.startsEarlier ? 'worked today' : 'worked'} —{' '}
+        {today.startsEarlier ? 'worked this session' : 'worked'} —{' '}
         {held ? (
           <>holding since {formatTime(status.pauseStart)}, so this is not moving</>
         ) : today.startsEarlier ? (
@@ -112,17 +121,22 @@ export default function LiveSession({ status, today, axis, busy, send, readOnly 
         <Strip segments={today.segments} axis={axis} edge={today.edge} held={held} />
       </div>
 
+      {/* The session's, like the clock — every one of these is a figure the server
+          computed over the whole of it. They have to keep the clock's company and
+          not the strip's: paused and worked sum to "on the clock", and three
+          numbers that only add up when two are the session's and one is the day's
+          would be a sum that lies. */}
       <dl className="figures">
         <div>
           <dt>Paused</dt>
           <dd>
-            <Num>{formatDuration(today.pausedSeconds)}</Num>
+            <Num>{formatDuration(status.pausedSeconds)}</Num>
           </dd>
         </div>
         <div>
           <dt>Breaks</dt>
           <dd>
-            <Num>{today.pauseCount}</Num>
+            <Num>{status.pauseCount}</Num>
             {/* Prose, not a measurement, so it keeps its natural figures. */}
             {status.pauseInProgress && <span className="dim"> +1 open</span>}
           </dd>
@@ -130,7 +144,7 @@ export default function LiveSession({ status, today, axis, busy, send, readOnly 
         <div>
           <dt>On the clock</dt>
           <dd>
-            <Num>{formatDuration(today.grossSeconds)}</Num>
+            <Num>{formatDuration(status.grossSeconds)}</Num>
           </dd>
         </div>
       </dl>
