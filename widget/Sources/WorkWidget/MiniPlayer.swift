@@ -36,6 +36,7 @@ struct MiniPlayer: View {
     private static let captionWidth: CGFloat = 118
 
     @ObservedObject var model: TrackerModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
 
     /// The pointer is resting on the readout, so the caption gives its line to
@@ -59,25 +60,27 @@ struct MiniPlayer: View {
         .padding(.horizontal, 14)
         .frame(width: MiniPlayer.size.width, height: MiniPlayer.size.height)
         .background(
+            // The pill's face is the web's, layered so the readout still holds.
             // The frost alone lets a white desktop bleed through and wash the
-            // readout out -- worst in dark mode, where near-white numerals end up
-            // on a frost the white behind them has lifted almost to their own
-            // colour. The surface, laid over the frost, gives the pill a face of
-            // its own so the contrast is the palette's regardless of what is
-            // behind it; a sliver of translucency is left so it still reads as
-            // desktop furniture and not a card dropped on top.
+            // numerals out; the gradient -- the same bg-gradient.svg the web page
+            // wears -- gives the pill the shared identity; and the surface over it
+            // is the legibility scrim, thin in the dark where the gradient can
+            // show through, near-opaque in the light where near-black text needs a
+            // pale ground. A sliver of translucency is left throughout, so the
+            // pill still reads as desktop furniture and not a card dropped on top.
             ZStack {
                 Frost()
-                Palette.surface.opacity(0.8)
+                GradientBackdrop()
+                Palette.surface.opacity(colorScheme == .dark ? 0.55 : 0.85)
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            // A hairline, so the pill still has an edge against a pale desktop --
-            // firmer than before, because rule on white is faint and the drop
-            // shadow does little over a bright background.
+            // The pink edge the web wears, so the pill has an outline against a
+            // pale desktop and reads as the same instrument -- firmer than a
+            // hairline, because the drop shadow does little over a bright ground.
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Palette.rule.opacity(0.8), lineWidth: 1)
+                .strokeBorder(Palette.live.opacity(0.9), lineWidth: 1)
         )
         .onAppear {
             guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
@@ -132,14 +135,12 @@ struct MiniPlayer: View {
         let (major, seconds) = Clock.split(snapshot.workedSeconds)
         let held = snapshot.state != .running
 
+        // The minutes are what you read; the seconds only prove it is alive, so
+        // the seconds are dimmed. Each is celled, so nothing shifts as it ticks.
         return HStack(spacing: 0) {
-            Text(major)
-                .foregroundStyle(held ? Palette.ink2 : Palette.ink)
-            Text(seconds)
-                .foregroundStyle(Palette.ink2)
+            Celled(major, size: 25, colour: held ? Palette.ink2 : Palette.ink)
+            Celled(seconds, size: 25, colour: Palette.ink2)
         }
-        .font(Face.data(25))
-        .kerning(-0.5)
     }
 
     // Three things want this one line, and they are ranked. A fault outranks
@@ -269,7 +270,10 @@ private struct Control: View {
             face
                 .frame(width: 26, height: 26)
                 .background(
-                    Circle().fill(Palette.rule.opacity(hovering ? 0.9 : 0.35))
+                    // Pink, the web's accent, so the controls read as the same
+                    // instrument's. Soft at rest and filling under the pointer,
+                    // the way the web's one filled button lifts on hover.
+                    Circle().fill(Palette.live.opacity(hovering ? 0.9 : 0.4))
                 )
                 .contentShape(Circle())
         }
@@ -291,6 +295,84 @@ private struct Control: View {
             Image(systemName: symbol)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Palette.ink)
+        }
+    }
+}
+
+/// A number set so it holds still: each digit in a fixed-width cell, centred, so
+/// a `1` occupies exactly what a `0` does and nothing shifts as the clock ticks.
+///
+/// This is the widget's take on the web's `Num.jsx`. Zodiak's figures are
+/// proportional and its licence forbids recutting a tabular set in, so the web
+/// gives each digit an equal CSS cell; here each character is its own view in a
+/// zero-spacing row. Only digits are celled -- the colon passes through at its
+/// natural width, exactly as on the web -- and rendering each glyph separately
+/// sidesteps kerning as a bonus: there is no adjacent pair left for the font to
+/// pull together.
+private struct Celled: View {
+    let text: String
+    let size: CGFloat
+    let colour: Color
+
+    init(_ text: String, size: CGFloat, colour: Color) {
+        self.text = text
+        self.size = size
+        self.colour = colour
+    }
+
+    /// One digit cell. The web measured 0.72em as wide enough for Zodiak's widest
+    /// figure at these weights; the same ratio holds here, being the same font.
+    private var cell: CGFloat { size * 0.72 }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(text.enumerated()), id: \.offset) { _, character in
+                if character.isNumber {
+                    Text(String(character)).frame(width: cell)
+                } else {
+                    Text(String(character))
+                }
+            }
+        }
+        .font(Face.data(size))
+        .foregroundStyle(colour)
+    }
+}
+
+/// The pink gradient the web page wears, behind the pill.
+///
+/// It is the very same asset -- web/ui/public/bg-gradient.svg, a field of blurred
+/// blobs on the paper ground -- bundled into the app by make-app.sh and drawn as
+/// a vector (AppKit renders SVG natively), so the widget and the page share one
+/// backdrop rather than a lookalike. The web sets it `center / 80%`; here it is
+/// scaled to fill the pill's width, which for a panel this wide shows the whole
+/// breadth of the composition, cropped to a band -- the same artwork, scaled down
+/// to pill size. Absent -- a `swift run` dev build with no bundle -- it falls
+/// back to the paper ground alone, so the pill still has a solid face.
+private struct GradientBackdrop: View {
+    private static let image: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "bg-gradient", withExtension: "svg") else {
+            return nil
+        }
+        return NSImage(contentsOf: url)
+    }()
+
+    var body: some View {
+        if let image = GradientBackdrop.image {
+            // The pill is far wider than the artwork, so filling it lands one huge
+            // blob across the middle -- a hard shape, not the web's soft field. A
+            // heavy blur (over the blur the SVG already carries) and a scale past
+            // the edges melt it back into an even wash of colour, which is what the
+            // gradient reads as at page size and what belongs behind a readout.
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .scaleEffect(1.4)
+                .blur(radius: 22)
+        } else {
+            // The gradient's own ground, so the fallback is the same colour the
+            // artwork sits on rather than a hole.
+            Color(nsColor: NSColor(srgbRed: 0x10 / 255, green: 0x10 / 255, blue: 0x14 / 255, alpha: 1))
         }
     }
 }
