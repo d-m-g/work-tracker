@@ -19,6 +19,14 @@ import TaskField from './TaskField.jsx'
 function Day({ day, axis, index, send }) {
   const [open, setOpen] = useState(false)
 
+  // Latest first, the way the days themselves are stacked. `daysOf` hands these
+  // over in the order they happened, which is the order the strip draws them in
+  // and the order the tasks read in — but a list you open is a list you are
+  // scanning back through, and what you want first is how the day ended, not how
+  // it began. Reversed here, for the reading, not in the data.
+  const parts = [...day.parts].reverse()
+  const breaks = day.segments.filter((segment) => segment.kind === 'pause').reverse()
+
   return (
     <li className="day" style={{ '--row': index }}>
       <button
@@ -50,8 +58,16 @@ function Day({ day, axis, index, send }) {
 
       {open && (
         <div className="day__open">
+          {/* Both lists are stamped, because they are two different things and
+              nothing else tells them apart: a session is a stretch you tracked, a
+              break is a hole you punched in one. Unlabelled, the breaks read as
+              more sessions — sessions with no task, no box to give one, and times
+              that match nothing above them. */}
+          <p className="eyebrow day__label">
+            {day.parts.length} session{day.parts.length === 1 ? '' : 's'}
+          </p>
           <ol className="parts">
-            {day.parts.map((part) => (
+            {parts.map((part) => (
               <li className="part" key={`${part.id}-${part.from}`}>
                 <span className="part__when dim">
                   <Num>{formatTime(new Date(part.from).toISOString())}</Num> –{' '}
@@ -79,11 +95,14 @@ function Day({ day, axis, index, send }) {
             ))}
           </ol>
 
-          {day.breaks > 0 && (
-            <ol className="breaks">
-              {day.segments
-                .filter((segment) => segment.kind === 'pause')
-                .map((pause) => (
+          {breaks.length > 0 && (
+            <>
+              <p className="eyebrow day__label day__label--breaks">
+                {breaks.length} break{breaks.length === 1 ? '' : 's'} ·{' '}
+                {formatDuration(day.pausedSeconds)}
+              </p>
+              <ol className="breaks">
+                {breaks.map((pause) => (
                   <li key={pause.at}>
                     <span className="dim">
                       <Num>{formatTime(new Date(pause.at).toISOString())}</Num> –{' '}
@@ -94,7 +113,8 @@ function Day({ day, axis, index, send }) {
                     </span>
                   </li>
                 ))}
-            </ol>
+              </ol>
+            </>
           )}
         </div>
       )}

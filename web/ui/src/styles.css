@@ -734,6 +734,21 @@ html::before {
   text-align: right;
 }
 
+/* The stamp over each of the two lists a day opens into. Without it they are one
+   undifferentiated run of times, and the breaks read as sessions whose hours
+   match nothing — see History.jsx. */
+.day__label {
+  margin: 0 0 0.5rem;
+}
+
+/* The breaks are the second list, and they are a different kind of thing, so they
+   get a rule as well as a name. */
+.day__label--breaks {
+  margin-top: 1.25rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--rule);
+}
+
 /* What the day was actually made of: one line per session that touched it, each
    with the hours it ran here and a box for what it was. */
 .parts {
@@ -780,10 +795,8 @@ html::before {
 
 .breaks {
   list-style: none;
-  margin: 0.75rem 0 0;
+  margin: 0;
   padding: 0;
-  border-top: 1px solid var(--rule);
-  padding-top: 0.5rem;
 }
 
 .breaks li {
