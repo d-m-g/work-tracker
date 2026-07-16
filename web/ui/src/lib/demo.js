@@ -29,6 +29,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+// The very midnight the history cuts on, so a session the demo means to land at
+// 22:10 lands there on the same day the strips draw it on.
+import { midnightOf } from './timeline.js'
 
 const MINUTE = 60 * 1000
 const HOUR = 60 * MINUTE
@@ -98,26 +101,50 @@ const LIVE_BREAKS = [
 const LIVE_TASK = 'Demo mode — the viewer, on a day that never happened'
 
 /**
- * The archive, as days hung off the live session's start.
+ * The archive: `back` days ago, starting at minute `at` of that day, running for
+ * `gross` minutes, with breaks at [minutes in, minutes long].
  *
- * `back` is whole days; `shift` moves the start within the day, so the mornings
- * are not all identical to the minute. They stay *near* each other on purpose:
- * the strips share one time-of-day axis (lib/timeline.js), and a fortnight that
- * all begins around the same hour is what gives that axis something to say.
+ * The hours are absolute — 09:34, not "an hour before the live session" — and
+ * that is a correction, not a detail. Hanging them off `now` meant the whole
+ * fortnight slid up and down the clock with the hour you happened to visit: at
+ * lunchtime it was a fortnight of office days, and at midnight the same data
+ * became a fortnight of sessions that all fell over midnight and split in half.
+ * The demo would have been showing off the cut by accident, differently every
+ * hour, and a fortnight that reads differently at 23:00 than at noon is not a
+ * fortnight. Only the live session moves with you now; the past is the past.
  *
  * The gaps in `back` are the weekends and the day off. A demo with a perfect
  * unbroken row of days is a demo of a spreadsheet, not of anyone's fortnight.
+ *
+ * Two entries are doing work beyond filling the list:
+ *
+ * * **back 2 holds three sessions.** A day is not a session — you start and stop
+ *   as the day happens to go — and the history draws the day, so the demo had
+ *   better contain a day worth drawing.
+ * * **back 5 crosses midnight**, 22:10 to 02:26. One session, two days' work: the
+ *   history cuts it at midnight, back 5 keeps the evening and back 4 gets the
+ *   small hours on top of its own afternoon. That cut is what holds the ruler to
+ *   a day, and a demo that never saw a midnight would never show it.
  */
 const ARCHIVE = [
-  { back: 1, shift: -26, gross: 507, task: 'Widget: drive the VM over SSH, with an offline fallback', breaks: [[124, 36], [318, 21]] },
-  { back: 2, shift: 18, gross: 442, task: 'Dress the viewer in the portfolio’s voice', breaks: [[188, 43]] },
-  { back: 3, shift: -41, gross: 601, task: 'Password login for the public viewer', breaks: [[97, 17], [251, 48], [455, 24]] },
-  { back: 4, shift: 34, gross: 268, task: null, breaks: [] },
-  { back: 7, shift: -12, gross: 473, task: 'Size the viewer for touch; lift the hero card', breaks: [[205, 52]] },
-  { back: 8, shift: 22, gross: 388, task: 'Give the mini player a face so the readout can’t wash out', breaks: [[143, 27], [299, 19]] },
-  { back: 9, shift: -33, gross: 556, task: 'Session strips: one axis, so a late start looks late', breaks: [[176, 38]] },
-  { back: 11, shift: 9, gross: 419, task: 'Shortcuts: Start, Pause, Stop, and one key that toggles', breaks: [[211, 25]] },
-  { back: 12, shift: -19, gross: 534, task: 'Tracker core — one writer, atomic writes, no lost days', breaks: [[131, 29], [341, 44]] },
+  { back: 1, at: 9 * 60 + 34, gross: 507, task: 'Widget: drive the VM over SSH, with an offline fallback', breaks: [[124, 36], [318, 21]] },
+
+  // One day, three sessions, one strip.
+  { back: 2, at: 9 * 60 + 12, gross: 148, task: 'Dress the viewer in the portfolio’s voice', breaks: [] },
+  { back: 2, at: 12 * 60 + 40, gross: 212, task: 'Dress the viewer in the portfolio’s voice', breaks: [[96, 24]] },
+  { back: 2, at: 17 * 60 + 5, gross: 163, task: 'Zodiak’s figures, celled in CSS', breaks: [] },
+
+  { back: 3, at: 8 * 60 + 50, gross: 601, task: 'Password login for the public viewer', breaks: [[97, 17], [251, 48], [455, 24]] },
+  { back: 4, at: 14 * 60 + 20, gross: 268, task: null, breaks: [] },
+
+  // The long night, and the only midnight in the fortnight.
+  { back: 5, at: 22 * 60 + 10, gross: 256, task: 'The night before the deadline', breaks: [[118, 22]] },
+
+  { back: 7, at: 10 * 60 + 5, gross: 473, task: 'Size the viewer for touch; lift the hero card', breaks: [[205, 52]] },
+  { back: 8, at: 11 * 60 + 30, gross: 388, task: 'Give the mini player a face so the readout can’t wash out', breaks: [[143, 27], [299, 19]] },
+  { back: 9, at: 9 * 60 + 45, gross: 556, task: 'Session strips: one axis, so a late start looks late', breaks: [[176, 38]] },
+  { back: 11, at: 10 * 60 + 20, gross: 419, task: 'Shortcuts: Start, Pause, Stop, and one key that toggles', breaks: [[211, 25]] },
+  { back: 12, at: 8 * 60 + 40, gross: 534, task: 'Tracker core — one writer, atomic writes, no lost days', breaks: [[131, 29], [341, 44]] },
 ]
 
 /** Build the demo's opening state: a session in progress, and a fortnight behind it. */
@@ -135,14 +162,16 @@ function seed() {
       })),
       pauseStart: null,
     },
-    archive: ARCHIVE.map((day) => {
-      const began = start - day.back * DAY + day.shift * MINUTE
-      const ended = began + day.gross * MINUTE
-      const pauses = day.breaks.map(([at, length]) => ({
+    archive: ARCHIVE.map((entry) => {
+      // Midnight `back` days ago, plus the hour it actually began at. Anchored to
+      // the day rather than to the live session, so the fortnight sits still.
+      const began = midnightOf(start - entry.back * DAY) + entry.at * MINUTE
+      const ended = began + entry.gross * MINUTE
+      const pauses = entry.breaks.map(([at, length]) => ({
         from: began + at * MINUTE,
         to: began + (at + length) * MINUTE,
       }))
-      return completedOf({ id: idOf(began), start: began, task: day.task, pauses }, ended)
+      return completedOf({ id: idOf(began), start: began, task: entry.task, pauses }, ended)
     }),
   }
 }

@@ -580,14 +580,36 @@ two ever drift, the demo is the one that is wrong.
   put in the opposite corner from **Stop** on purpose: the two are a sentence apart
   ("end the session") and a day apart in consequence, so they are not placed
   together and are not styled alike.
-* **The day as a strip** — the signature of the thing. Each session is drawn as a
-  band on a shared **time-of-day** axis: worked time is ink, and a pause is the
-  *absence* of ink, the track showing through. The live session carries a warm
-  edge marking where the day has got to — the only warm colour on the page, so
-  the only thing still moving is the only thing that is warm.
-* **Every previous session** — newest first, each on that same axis, so the days
-  are directly comparable and a late start *looks* late. Click one to read its
-  individual pauses; hover any block for its clock times.
+* **The day as a strip** — the signature of the thing. A day is drawn as a band on
+  a **time-of-day** axis: worked time is ink, and a pause is the *absence* of ink,
+  the track showing through. The live session carries a warm edge marking where
+  the day has got to — the only warm colour on the page, so the only thing still
+  moving is the only thing that is warm.
+* **Every previous day** — newest first, on one fixed 00:00–00:00 ruler, so the
+  days are directly comparable and a late start *looks* late. The row is a **day**,
+  not a session: start and stop six times between breakfast and bed and that is
+  six sessions and one day, all on the day's one strip. How many times you pressed
+  the button is bookkeeping, and it lives *inside* the row — click one to read the
+  sessions it was made of, each with its own hours and its own label, and its
+  breaks. Hover any block for its clock times.
+* **A session that runs past midnight is two days' work, and is cut at it.** 21:24
+  Tuesday to 01:38 Wednesday means Tuesday worked until midnight and Wednesday
+  started at 00:00, because that is what happened, and each day counts only its
+  own hours. The pieces still sum to the session exactly — splitting moves seconds
+  between days, it never creates or loses one — and a row showing a slice of
+  something larger says so ("from the night before").
+
+  This is also what keeps the ruler honest. Before it, a session ending at 01:38
+  was minute 1594 of the day it began, the axis had to stretch to 27 hours to
+  hold it, and every day's ink was squeezed into what was left. No day can exceed
+  24 hours now, so the ruler is a day. The one thing that may still push it is a
+  live session running past midnight, which is drawn whole because you are in the
+  middle of it — for as long as it takes you to press Stop.
+* **The day, in the viewer's own timezone.** The stored timestamps carry explicit
+  offsets, and they are not all the same offset — a session started on the Mac and
+  stopped on the VM has one of each. So the browser parses them to absolute time
+  and groups by *its* local midnight, which is the only "day" that means anything
+  to the person reading the page.
 * **Totals** across the whole archive.
 * **Corrupt files**, if any. A session file the tracker cannot parse is named
   explicitly rather than silently skipped, and the other sessions still load —

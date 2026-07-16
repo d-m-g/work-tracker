@@ -1,4 +1,5 @@
 import { formatDuration, formatTime } from '../lib/format.js'
+import { baseOf, minutesOf, segmentsOf, spanOf } from '../lib/timeline.js'
 import Controls, { StartForm } from './Controls.jsx'
 import Num from './Num.jsx'
 import Strip, { Ruler } from './Strip.jsx'
@@ -79,7 +80,17 @@ export default function LiveSession({ status, axis, busy, send }) {
 
       <div className="live__timeline">
         <Ruler axis={axis} />
-        <Strip session={status} axis={axis} live />
+        {/* The live session is drawn whole, on the day it began — one session you
+            are in the middle of, not two halves of two days. If it has run past
+            midnight the axis stretches for it (see lib/timeline.js), which is the
+            only time this page's ruler reads past 24:00. The history, being days
+            rather than sessions, is cut at midnight instead. */}
+        <Strip
+          segments={segmentsOf(status)}
+          axis={axis}
+          edge={minutesOf(spanOf(status).end, baseOf(status))}
+          held={held}
+        />
       </div>
 
       <dl className="figures">

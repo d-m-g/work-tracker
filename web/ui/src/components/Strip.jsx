@@ -1,25 +1,27 @@
 import { formatDuration, formatTime } from '../lib/format.js'
-import { baseOf, hourLabel, minutesOf, positionOf, segmentsOf, spanOf } from '../lib/timeline.js'
+import { hourLabel, positionOf } from '../lib/timeline.js'
 import Num from './Num.jsx'
 
 /**
- * One session, drawn as a band on the shared time-of-day axis.
+ * A band on the shared time-of-day axis. One day of it, or one live session.
  *
  * Worked time is ink. A pause is the *absence* of ink — the track showing
  * through — because that is what a pause is. Reading the strip left to right is
  * reading the day: when it began, where it broke, when it ended.
  *
+ * It takes segments rather than a session, because a day is not a session. Six
+ * sessions between breakfast and bed are one day and one strip, and the run of
+ * track between two of them is not a pause — it is simply time you were not
+ * working, which the track already says by being what it is. Only a break you
+ * took *inside* a session gets a segment of its own.
+ *
  * A live session gets a lit edge at its leading end. It shares the accent's hue
  * rather than opposing it, so it is told apart by being lighter, by breathing,
  * and by standing proud of the strip at both ends.
  */
-export default function Strip({ session, axis, live = false }) {
-  const segments = segmentsOf(session)
-  const held = Boolean(session.pauseStart)
-  const edge = minutesOf(spanOf(session).end, baseOf(session))
-
+export default function Strip({ segments, axis, edge = null, held = false, label }) {
   return (
-    <div className="strip" role="img" aria-label={label(session, segments)}>
+    <div className="strip" role="img" aria-label={label ?? describe(segments)}>
       <div className="strip__track" />
 
       {segments.map((segment) => {
@@ -43,7 +45,7 @@ export default function Strip({ session, axis, live = false }) {
         )
       })}
 
-      {live && (
+      {edge !== null && (
         <div
           className={`strip__edge ${held ? 'strip__edge--held' : ''}`}
           style={{ left: `${positionOf(edge, axis)}%` }}
@@ -54,7 +56,7 @@ export default function Strip({ session, axis, live = false }) {
 }
 
 /** What a screen reader hears instead of the picture. */
-function label(session, segments) {
+function describe(segments) {
   const blocks = segments.filter((segment) => segment.kind === 'work').length
   const pauses = segments.filter((segment) => segment.kind === 'pause').length
   return `Timeline: ${blocks} working ${blocks === 1 ? 'block' : 'blocks'}, ${pauses} ${

@@ -3,7 +3,7 @@ import History from './components/History.jsx'
 import LiveSession from './components/LiveSession.jsx'
 import WidgetPortrait from './components/WidgetPortrait.jsx'
 import { isDemo, useDemoTracker } from './lib/demo.js'
-import { axisFor } from './lib/timeline.js'
+import { axisFor, daysOf } from './lib/timeline.js'
 import { useTracker } from './lib/useTracker.js'
 
 /**
@@ -36,14 +36,20 @@ const DEMO = isDemo()
 function Viewer({ tracker, demo = false }) {
   const { status, sessions, error, refusal, busy, send, signOut } = tracker
 
+  // The history is days, not sessions: every session that touched a Tuesday is
+  // drawn on Tuesday's one strip, and a session that ran past midnight is cut at
+  // it so each day counts only its own hours. See lib/timeline.js.
+  const days = useMemo(() => (sessions ? daysOf(sessions.sessions) : null), [sessions])
+
   // One axis for every strip on the page, live and archived alike. Sharing it is
-  // what makes the days comparable: a late start *looks* late.
-  const axis = useMemo(() => {
-    const spans = []
-    if (status && status.state !== 'idle') spans.push(status)
-    if (sessions) spans.push(...sessions.sessions)
-    return axisFor(spans)
-  }, [status, sessions])
+  // what makes the days comparable: a late start *looks* late. It is a fixed day
+  // — nothing in `days` can push it, because they have all been cut to fit — so
+  // only the live session is offered to it, being the one thing that may still be
+  // running past a midnight.
+  const axis = useMemo(
+    () => axisFor(status && status.state !== 'idle' ? [status] : []),
+    [status],
+  )
 
   return (
     <main className="page">
@@ -89,7 +95,13 @@ function Viewer({ tracker, demo = false }) {
           something you are already looking at. */}
       {demo && <WidgetPortrait status={status} />}
 
-      <History sessions={sessions} axis={axis} send={send} />
+      <History
+        days={days}
+        totals={sessions?.totals ?? { count: 0, workedSeconds: 0, pausedSeconds: 0 }}
+        unreadable={sessions?.unreadable ?? []}
+        axis={axis}
+        send={send}
+      />
     </main>
   )
 }

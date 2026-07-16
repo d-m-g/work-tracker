@@ -515,6 +515,18 @@ html::before {
   white-space: nowrap;
 }
 
+/* The ruler is a whole day now, so its first and last ticks sit exactly on 0% and
+   100% — and a label centred on the edge hangs half of itself off it. Both ends
+   turn inward instead: `00` still marks the same two midnights, and you can read
+   all of it. Every tick between them stays centred on the hour it names. */
+.ruler__tick:first-child {
+  transform: none;
+}
+
+.ruler__tick:last-child {
+  transform: translateX(-100%);
+}
+
 .strip {
   position: relative;
   height: var(--strip-h);
@@ -722,10 +734,56 @@ html::before {
   text-align: right;
 }
 
+/* What the day was actually made of: one line per session that touched it, each
+   with the hours it ran here and a box for what it was. */
+.parts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.part {
+  display: grid;
+  grid-template-columns: 14rem 5rem 1fr;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+}
+
+.part__when {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.8rem;
+}
+
+/* A session that spilled over a midnight. Set as prose in the voice face, not as
+   a measurement: it is a remark about the number beside it, not another number. */
+.part__spill {
+  font-family: var(--face-body);
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.part__worked {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.85rem;
+}
+
+.part .task {
+  margin: 0;
+}
+
+.part .task__input {
+  font-size: 0.85rem;
+}
+
 .breaks {
   list-style: none;
-  margin: 0.5rem 0 0;
+  margin: 0.75rem 0 0;
   padding: 0;
+  border-top: 1px solid var(--rule);
+  padding-top: 0.5rem;
 }
 
 .breaks li {
@@ -1069,6 +1127,24 @@ html::before {
   .day__open {
     padding-left: 0;
     padding-right: 0;
+  }
+
+  /* A session's line stacks rather than being crushed into three columns: the
+     hours it ran and what it was are both sentences, and neither survives 4rem. */
+  .part {
+    grid-template-columns: 1fr auto;
+    gap: 0.15rem 0.75rem;
+  }
+  .part__when {
+    order: 1;
+  }
+  .part__worked {
+    order: 2;
+    text-align: right;
+  }
+  .part .task {
+    order: 3;
+    grid-column: 1 / -1;
   }
 
   /* The box is the thing you are here to fill in; the button can have the rest. */
