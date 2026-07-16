@@ -143,5 +143,33 @@ export function useTracker() {
     [loadSessions],
   )
 
-  return { status, sessions, error, refusal, busy, send, reload: loadSessions }
+  /**
+   * End the session — the browser's, not the day's.
+   *
+   * The server clears the cookie and the reload is what actually signs you out:
+   * every path now answers with the login form, so the app is replaced by it
+   * rather than being asked to render a logged-out version of itself. There is no
+   * logged-out version of itself, which is the point — see web/server.py.
+   *
+   * A failure here is worth showing rather than swallowing. If the POST does not
+   * land, the cookie is still in the browser and reloading would hand the app
+   * straight back, which looks exactly like a button that did nothing. Saying so
+   * is better than that.
+   */
+  const signOut = useCallback(async () => {
+    setBusy(true)
+    setRefusal(null)
+    try {
+      await postJSON('/api/logout')
+      window.location.reload()
+      // The reload owns the page now; nothing after this should run.
+      return new Promise(() => {})
+    } catch (err) {
+      setRefusal(err.message)
+      setBusy(false)
+      return false
+    }
+  }, [])
+
+  return { status, sessions, error, refusal, busy, send, signOut, reload: loadSessions }
 }

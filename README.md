@@ -462,8 +462,10 @@ A public URL is a different question — *who may look at all* — and the answe
 login. The origin check alone is not enough there: it stops a hostile page from
 writing, but anyone who knows the URL could still read your hours, and a script
 sending no `Origin` at all is deliberately allowed. So on the open internet you
-turn on a password, and then **every** request — read or write — must carry a
-session the server signed, or it gets the login form and nothing else.
+turn on a password, and then **every** request for your data — read or write — must
+carry a session the server signed, or it gets the login form. (The only thing an
+anonymous visitor is given is the app's own code, at [`/demo`](#the-demo-demo),
+which holds none of your data and could not fetch any if it wanted to.)
 
 It is off by default, so nothing above changes until you switch it on. Two steps:
 
@@ -514,8 +516,46 @@ That is what makes the `Secure` cookie and the whole login meaningful; without
 HTTPS a password travels in the clear. (For local testing over `http` only, add
 `--cookie-insecure` so the browser will return the cookie — never in production.)
 
+**Signing out** is a button in the masthead, top right — it clears the session
+cookie and the page comes back as the login form. It appears only when there is
+something to end: on a loopback server with no password there is no session, so
+there is no button, and the server says which case you are in (`login`, on the
+status payload). To sign *every* device out at once instead, delete
+`.session_secret` and restart — that invalidates every cookie the old secret ever
+signed.
+
 Rotating the password is `python3 -m web.auth --write .password` again and a
-restart. Deleting `.session_secret` and restarting logs every device out at once.
+restart.
+
+### The demo (`/demo`)
+
+A public URL that answers everyone with a password box says nothing about what is
+behind it. So the login form offers a second door — **See the demo** — and it
+opens on the whole viewer: a fortnight of sessions, a live clock, working buttons,
+and a picture of the widget ticking alongside. Nothing is behind glass; start,
+pause and stop it.
+
+None of it is real, and that is the security design rather than a caveat. The demo
+is fabricated **in the browser** (`web/ui/src/lib/demo.js`) and never calls the
+server, so there is no demo mode here to be talked into: `/api/` is still a flat
+401 without a cookie, and no request an anonymous visitor can send reads a session.
+What `/demo` hands out is the app's own code — the bundle, the stylesheet, the
+gradient, the font — which this repository publishes anyway.
+
+The line is drawn in one pure function, `web.server.public_path`, and defended in
+`tests/test_server.py`:
+
+| | Without the password |
+|---|---|
+| `/demo`, and the JS, CSS, SVG, font that draw it | **served** — code, published anyway |
+| `/api/status`, `/api/sessions`, any write | **401** — this is what the password is for |
+| `/`, `/index.html`, anything else | **the login form** — the app's shell has exactly one public route |
+
+The demo is held to the tracker's rules rather than flattered past them: the
+payloads are the shapes `web/api.py` builds, and a refusal comes back in
+`tracker.py`'s own words — press **Pause** on a paused demo session and you get
+*"the session is already paused"*, the same sentence the real one raises. If the
+two ever drift, the demo is the one that is wrong.
 
 ### What it shows, and what it lets you do
 
@@ -536,6 +576,10 @@ restart. Deleting `.session_secret` and restarting logs every device out at once
 * **Refusals, shown rather than swallowed** — in the same fault colour the widget
   uses, because "the tracker said no" is one idea and should look the same wherever
   you meet it.
+* **Sign out** — in the masthead, and only when a password is configured. It is
+  put in the opposite corner from **Stop** on purpose: the two are a sentence apart
+  ("end the session") and a day apart in consequence, so they are not placed
+  together and are not styled alike.
 * **The day as a strip** — the signature of the thing. Each session is drawn as a
   band on a shared **time-of-day** axis: worked time is ink, and a pause is the
   *absence* of ink, the track showing through. The live session carries a warm

@@ -179,9 +179,29 @@ code {
 }
 
 .masthead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 3rem;
   padding-bottom: 1.25rem;
   border-bottom: 1px solid var(--rule);
+}
+
+.masthead__titles {
+  min-width: 0;
+}
+
+/* Sign out is the least of the page's errands and is placed like it: outlined,
+   not filled, and off in the corner where nothing else is. It is deliberately
+   nowhere near Stop — the two are a sentence apart ("end the session") and a day
+   apart in consequence, so they do not sit together and do not look alike. */
+.masthead__out {
+  flex: none;
+  /* Optically level with the title's cap-height rather than its line box: the
+     button is a 44px block beside a 2.4rem serif, and aligning the boxes would
+     leave it visibly riding high. */
+  margin-top: 0.15rem;
 }
 
 /* The masthead is the one place Zodiak is allowed to be a display face rather
@@ -383,6 +403,9 @@ code {
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  /* The demo's way back to the login form is an <a> wearing this class — it
+     navigates, so it is a link, whatever it looks like. */
+  text-decoration: none;
   cursor: pointer;
   transition:
     filter 0.12s ease,
@@ -650,6 +673,181 @@ code {
   font-size: 0.9rem;
 }
 
+/* ---------- the demo ---------- */
+
+/* The demo's one disclaimer. It wears the accent rather than the fault colour:
+   this is not a warning, nothing is wrong, and a red block at the top of the page
+   would be the instrument crying out about its own healthiest state. It is a
+   label — the same pink everything else here is signed in. */
+.demo-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.25rem;
+  margin-bottom: 2.5rem;
+  padding: 0.9rem 1.1rem;
+  background: var(--row-hover);
+  border: 1px solid rgba(236, 72, 153, 0.25);
+  border-radius: 10px;
+}
+
+.demo-notice p:not(.eyebrow) {
+  flex: 1;
+  min-width: 15rem;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+
+.demo-notice__out {
+  margin-left: auto;
+}
+
+/* ---------- the widget's portrait ---------- */
+
+.portrait {
+  margin-bottom: 3.5rem;
+}
+
+.portrait__head {
+  margin-bottom: 1.1rem;
+}
+
+.portrait__note {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+}
+
+/* The pill, to the widget's own measurements — MiniPlayer.swift's, in pixels.
+   The sizes are px and not rem on purpose: this is a portrait of a 276×68 panel
+   at a fixed size on a desktop, and a root font-size it never sees should not be
+   able to stretch it. It is the one thing on this page that is not responsive,
+   because the thing it depicts is not either. */
+.pill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 276px;
+  max-width: 100%;
+  height: 68px;
+  padding: 0 14px;
+  background: var(--paper);
+  border: 1px solid rgba(244, 114, 182, 0.9); /* Palette.live at 0.9 */
+  border-radius: 16px;
+  box-shadow: var(--lift);
+  overflow: hidden;
+}
+
+/* The gradient the widget wears behind its readout: the same bg-gradient.svg the
+   page does, scaled past its edges and blurred hard, exactly as GradientBackdrop
+   does it (scale 1.4, blur 22) — at pill size the artwork is one huge blob, and
+   the blur is what melts it back into the field of colour it reads as on a page. */
+.pill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url('/bg-gradient.svg') center / cover no-repeat var(--paper);
+  transform: scale(1.4);
+  filter: blur(22px);
+}
+
+/* The legibility scrim. The widget lays its surface over the gradient at 0.55 in
+   the dark, thin enough for the colour to come through and opaque enough that the
+   numerals hold. Here the "desktop" behind is only ever this page, so there is no
+   frost to reproduce — the two layers that do the work are these. */
+.pill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--card);
+  opacity: 0.55;
+}
+
+/* Both layers above are positioned, so the readout has to be too, or it paints
+   under its own backdrop. */
+.pill > * {
+  position: relative;
+  z-index: 1;
+}
+
+.pill__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+/* The dot carries the colour, and it only carries it while the session is live.
+   Held, it is recessive ink; idle, it is barely a mark at all. */
+.pill__dot--held {
+  background: var(--ink-2);
+  animation: none;
+}
+
+.pill__dot--idle {
+  background: var(--rule);
+  animation: none;
+}
+
+.pill__readout {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.pill__clock {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 25px;
+  font-weight: 500;
+  line-height: 1.05;
+}
+
+/* One line, 118px, and the tail of a long caption is simply gone. The widget caps
+   it at exactly this and for the same reason: the panel is a fixed width, the
+   controls have first claim on it, and nothing a session was named may be allowed
+   to push anything. */
+.pill__caption {
+  max-width: 118px;
+  overflow: hidden;
+  font-family: var(--face-label);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1.3px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pill__controls {
+  display: flex;
+  gap: 4px;
+  margin-left: auto; /* the widget's Spacer */
+}
+
+/* Soft pink discs at rest. The real ones fill to 0.9 under the pointer; these
+   never do, because there is no pointer state to be in — they are drawn, not
+   pressable, and a hover that lit up would be promising a click that does nothing. */
+.pill__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(244, 114, 182, 0.4);
+}
+
+.pill__icon {
+  width: 11px;
+  height: 11px;
+  fill: var(--ink);
+}
+
 /* ---------- faults, and refusals ---------- */
 
 /* A refusal wears the same colour as a fault, exactly as it does in the widget:
@@ -741,6 +939,17 @@ code {
 /* ---------- narrow ---------- */
 
 @media (max-width: 40rem) {
+  /* The wash is one composition, and it was composed for a page a thousand pixels
+     across: six soft blobs spread over a 3:2 field. At `80%` of a phone that whole
+     field collapses into a smudge the size of a business card, floating in the
+     middle of a black screen — the gradient stops being the room the page is in
+     and becomes an object on it. Blowing it up past the viewport puts the page
+     back *inside* it: you get a couple of blobs at something like the scale the
+     desktop shows, which is what the wash is for. */
+  body::after {
+    background-size: 220% auto;
+  }
+
   .page {
     padding: 2.5rem 1.1rem 3rem;
   }

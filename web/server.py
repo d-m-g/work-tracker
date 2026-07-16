@@ -41,12 +41,28 @@ the open network is a different question -- who may look at all -- and the answe
 is a login. Configure a password (``--password-file``, or the
 ``WORK_TRACKER_PASSWORD_HASH`` environment variable) and every request, read or
 write, must carry a session cookie the server signed; an unauthenticated browser
-receives the login form and nothing else. The mechanism lives in :mod:`web.auth`,
-kept pure and tested there. With no password configured the server runs open,
-exactly as it always did -- so the local CLI-and-Shortcuts workflow is unchanged,
-and the switch is thrown only when you deploy. See :func:`_build_auth`, which
-*fails closed*: naming a password file that turns out to be empty stops the
-server rather than quietly starting it unprotected.
+receives the login form and, at the one route below, the demo. The mechanism
+lives in :mod:`web.auth`, kept pure and tested there. With no password configured
+the server runs open, exactly as it always did -- so the local CLI-and-Shortcuts
+workflow is unchanged, and the switch is thrown only when you deploy. See
+:func:`_build_auth`, which *fails closed*: naming a password file that turns out
+to be empty stops the server rather than quietly starting it unprotected.
+
+**The demo is code without data.** A public URL that answers every visitor with a
+password box says nothing about what is behind it, so ``/demo`` hands out the app
+itself -- and only the app. What it renders is fabricated in the browser
+(``web/ui/src/lib/demo.js``): the demo never calls this server, and this server
+has no demo mode to be talked into. That is what makes the route safe to leave
+open, and it is a property of the *architecture*, not of a check that could be
+got past: there is no request an unauthenticated visitor can send that reads a
+session, because ``/api/`` is still a flat 401 for anyone without a cookie.
+
+So the line :func:`public_path` draws is between the app's *code* and your
+*hours*. Code -- the bundle, the stylesheet, the gradient, the shell at ``/demo``
+-- is public, and was always going to be the moment you put a URL on the
+internet. Everything that came off your disk needs the password, exactly as
+before. The shell is handed out at ``/demo`` alone and never at ``/``, so the URL
+you share still opens on the login form.
 
 **Driving it from another device is opt-in, and off by default.** To control the
 tracker from a phone you widen both locks yourself, on purpose: ``--host`` to
@@ -73,7 +89,7 @@ import sys
 from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -197,6 +213,56 @@ _CONTENT_TYPES = {
     ".map": "application/json; charset=utf-8",
 }
 
+#: Where a visitor without the password is shown the instrument working. The app
+#: recognises this path and runs against a tracker it invents in the browser --
+#: see web/ui/src/lib/demo.js. Nothing here serves it any data, because there is
+#: no data in it to serve.
+DEMO_PATH = "/demo"
+
+#: What an unauthenticated browser may fetch out of `dist`: what it takes to
+#: *paint* the demo, and nothing beyond it. Written out rather than derived from
+#: _CONTENT_TYPES, so that letting the app serve a new kind of file is never the
+#: same act as publishing it -- widening this set stays a thing somebody decided.
+#:
+#: Three of _CONTENT_TYPES' entries are deliberately absent. `.html` is the app's
+#: shell, which is handed out at DEMO_PATH and nowhere else, so the bare URL opens
+#: on the login form rather than on a flash of the app. `.json` is the shape the
+#: tracker's own data comes in; nothing the demo draws is fetched as JSON, so
+#: there is no reason to be the kind of server that hands one over. `.map` is a
+#: debugging aid the demo does not need to look right.
+_PUBLIC_SUFFIXES = frozenset({".js", ".css", ".svg", ".png", ".ico", ".woff2"})
+
+
+def public_path(path: str) -> Optional[str]:
+    """Map an unauthenticated GET onto the file it may be answered with.
+
+    The demo is why this exists. It is a whole React app, so letting a visitor
+    see it means letting their browser fetch the bundle, the stylesheet and the
+    font that draw it -- and the app's shell, once, at :data:`DEMO_PATH`. That
+    costs nothing to give away: it is the same code this repository publishes,
+    and it renders a session that never happened.
+
+    What is *not* on the list is the point of the list. There is no ``/api/``
+    path here (the caller answers those with a 401 before asking), and no route
+    that yields ``index.html`` other than the demo -- so a visitor without the
+    password can read the instrument's code and never a minute of your time.
+
+    Kept a free function, with no ``self`` and no socket, so the decision is
+    asserted directly in the tests -- the same shape as :func:`_origin_allowed`.
+
+    Args:
+        path: The URL path, already stripped of its query.
+
+    Returns:
+        The path to serve out of ``dist``, or ``None`` to show the login form.
+    """
+    if path == DEMO_PATH or path.startswith(DEMO_PATH + "/"):
+        return "/index.html"
+    if PurePosixPath(path).suffix in _PUBLIC_SUFFIXES:
+        return path
+    return None
+
+
 _NO_BUILD_PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>work-tracker</title>
 <style>
@@ -222,40 +288,94 @@ npm run build</pre>
 """
 
 #: Shown at every path when a password is configured and the request is not
-#: logged in. It is a whole self-contained page -- no bundle, no assets -- so it
-#: can be served *instead of* the app: an unauthenticated browser never receives
-#: a single byte of the tracker, only this form. The form posts JSON to
+#: logged in. It is served *instead of* the app: a browser without the password
+#: receives this form and none of the tracker's data. The form posts JSON to
 #: /api/login and, on success, reloads to receive the app it could not see before.
+#:
+#: It is written out by hand rather than built, because it must be renderable
+#: before the bundle is -- but it is not a plain page for that. It is the front
+#: door of a public URL, and it opens onto something dressed in the portfolio's
+#: voice, so it wears that voice too: the paper, the pink, the gradient and
+#: Zodiak, all re-expressed here from web/ui/src/styles.css's `:root` for the one
+#: page that cannot import it. It leans on the build for exactly two files, both
+#: of which web.public_path lets an unauthenticated browser have: the font and
+#: the gradient. Without a build (or without the font, which the licence keeps
+#: out of the repository) the page still stands -- Georgia, and the paper with no
+#: wash on it -- because everything load-bearing here is CSS, not an asset.
 _LOGIN_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Work Tracker — sign in</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23101014'/%3E%3Ctext x='50' y='68' font-size='56' font-family='Archivo,sans-serif' font-weight='700' fill='%23EC4899' text-anchor='middle'%3Ed%3C/text%3E%3C/svg%3E">
 <style>
- body{font:16px/1.6 -apple-system,system-ui,sans-serif;max-width:22rem;
-      margin:18vh auto;padding:0 1.5rem;color:#1d1d1f}
- h1{font-size:1.3rem;margin:0 0 .25rem}
- p.dim{color:#6b6b70;margin:.25rem 0 1.5rem}
+ @font-face{font-family:'Zodiak';
+   src:url('/fonts/Zodiak-Variable.woff2') format('woff2'),
+       url('/fonts/Zodiak-Variable.woff') format('woff');
+   font-weight:100 900;font-style:normal;font-display:swap}
+ :root{--paper:#101014;--card:#17171c;--ink:#fafafa;--ink-2:#a1a1aa;
+   --rule:#26262c;--work:#ec4899;--on-work:#0a0a0c;--fault:#f87171;
+   --fault-bg:#2a1618;--face:'Zodiak',ui-serif,Georgia,serif}
+ *{box-sizing:border-box}
+ body{margin:0;min-height:100vh;display:flex;align-items:center;
+   justify-content:center;padding:2rem 1.5rem;
+   background-color:var(--paper);color:var(--ink);
+   font:500 15px/1.55 var(--face);-webkit-font-smoothing:antialiased}
+ /* The page's wash, exactly as the app wears it. */
+ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:-1;
+   opacity:.15;
+   background:url('/bg-gradient.svg') center / 80% auto no-repeat var(--paper);
+   filter:blur(40px) saturate(1.1)}
+ main{width:100%;max-width:23rem}
+ h1{margin:0;font-size:2rem;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+ p.dim{color:var(--ink-2);margin:.35rem 0 2rem;font-size:.85rem}
  form{display:flex;flex-direction:column;gap:.75rem}
- input,button{font:inherit;padding:.6rem .75rem;border-radius:8px;
-      border:1px solid #c9c9ce}
- input{background:#fff}
- button{border:none;background:#0071e3;color:#fff;font-weight:600;cursor:pointer}
- button:disabled{opacity:.5;cursor:default}
- p.err{color:#c1121f;min-height:1.6em;margin:.5rem 0 0}
- @media(prefers-color-scheme:dark){
-   body{background:#151517;color:#f2f2f7}
-   input{background:#252529;border-color:#3a3a3f;color:#f2f2f7}
-   p.dim{color:#9a9aa0}}
+ input{width:100%;min-height:44px;padding:.5rem .7rem;background:var(--card);
+   border:1px solid var(--rule);border-radius:6px;color:var(--ink);
+   font:inherit;font-size:.95rem}
+ input::placeholder{color:var(--ink-2)}
+ input:focus{outline:none;border-color:var(--work)}
+ /* The same two buttons the app has: one filled thing you came to press, and
+    one that is outlined because it is the lesser errand. */
+ .btn{display:inline-flex;align-items:center;justify-content:center;
+   min-height:44px;padding:.55rem 1.2rem;border:1px solid transparent;
+   border-radius:6px;font-family:var(--face);font-size:.72rem;font-weight:600;
+   letter-spacing:.1em;text-transform:uppercase;text-decoration:none;
+   cursor:pointer;transition:filter .12s ease,border-color .12s ease,color .12s ease}
+ .btn:not(:disabled):hover{filter:brightness(1.08)}
+ .btn:disabled{opacity:.45;cursor:default}
+ .btn--go{background:var(--work);color:var(--on-work);width:100%}
+ .btn--demo{background:none;border-color:var(--rule);color:var(--ink-2);width:100%}
+ .btn--demo:hover{border-color:var(--ink-2);color:var(--ink)}
+ /* "or" between the two, a rule through it. */
+ .or{display:flex;align-items:center;gap:.75rem;margin:1.25rem 0;
+   font-size:.62rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+   color:var(--ink-2)}
+ .or::before,.or::after{content:'';flex:1;height:1px;background:var(--rule)}
+ .note{margin:.75rem 0 0;font-size:.75rem;color:var(--ink-2);text-align:center}
+ p.err{margin:.5rem 0 0;min-height:1.6em;font-size:.85rem;color:var(--fault)}
+ p.err:not(:empty){background:var(--fault-bg);
+   border:1px solid rgba(248,113,113,.2);border-radius:8px;padding:.8rem 1rem}
+ :focus-visible{outline:2px solid var(--work);outline-offset:3px}
+ @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+ /* The wash is composed for a wide page; at 80% of a phone it is a smudge in
+    the middle. Blown up, it reads as the field of colour it is meant to be. */
+ @media(max-width:40rem){body::after{background-size:220% auto}}
 </style></head>
 <body>
- <h1>Work Tracker</h1>
- <p class="dim">Enter the password to continue.</p>
- <form id="f">
-   <input id="pw" type="password" name="password" placeholder="Password"
-          autocomplete="current-password" autofocus required>
-   <button id="go" type="submit">Sign in</button>
- </form>
- <p class="err" id="err" role="alert"></p>
+ <main>
+   <h1>Work Tracker</h1>
+   <p class="dim">Enter the password to continue.</p>
+   <form id="f">
+     <input id="pw" type="password" name="password" placeholder="Password"
+            autocomplete="current-password" autofocus required>
+     <button id="go" type="submit" class="btn btn--go">Sign in</button>
+   </form>
+   <p class="err" id="err" role="alert"></p>
+   <p class="or">or</p>
+   <a class="btn btn--demo" href="/demo">See the demo</a>
+   <p class="note">A session that never happened, played out in your browser.</p>
+ </main>
 <script>
  const f=document.getElementById('f'),pw=document.getElementById('pw'),
        go=document.getElementById('go'),err=document.getElementById('err');
@@ -305,22 +425,37 @@ class ViewerHandler(BaseHTTPRequestHandler):
         """Route a GET: the two read endpoints, or the built UI.
 
         When a password is configured, an unauthenticated GET never reaches any
-        of that. An API path is answered with a bare 401; anything else is
-        answered with the login page, served *in place of* the app -- so the
-        browser of someone without the password receives the form and nothing
-        else, not a single line of the tracker's own markup or data.
+        of that. An API path is answered with a bare 401. The demo, and the
+        assets that draw it, are served (:func:`public_path`) -- they are code,
+        and they hold nothing of yours. Everything else is answered with the
+        login page, served *in place of* the app, so the browser of someone
+        without the password receives the form and not one line of your data.
+
+        The SPA fallback is off for that visitor: a public path that names no
+        real file is a 404, never the app's shell. The shell is reached at
+        :data:`DEMO_PATH` and by no other spelling.
         """
         path = urlparse(self.path).path
 
         if self._auth is not None and not self._authenticated():
             if path.startswith("/api/"):
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "authentication required"})
-            else:
+                return
+            public = public_path(path)
+            if public is None:
                 self._send_html(HTTPStatus.OK, _LOGIN_PAGE)
+            else:
+                self._serve_static(public, index_fallback=False)
             return
 
         if path == "/api/status":
-            self._serve_json(build_status_payload, "status")
+            # Whether there is a session to end is this server's fact, not the
+            # tracker's: web/api.py is a pure function of a Storage and has never
+            # heard of a password. So the flag is stapled on here, in the adapter
+            # that does know, rather than threaded down into the payload builder.
+            # It rides on the status poll because the UI needs it before its first
+            # paint, and status is the request it was already making.
+            self._serve_json(build_status_payload, "status", extra={"login": self._auth is not None})
         elif path == "/api/sessions":
             self._serve_json(build_sessions_payload, "sessions")
         elif path.startswith("/api/"):
@@ -491,8 +626,25 @@ class ViewerHandler(BaseHTTPRequestHandler):
         )
 
     def _handle_logout(self) -> None:
-        """Clear the session cookie. Always succeeds; there is nothing to refuse."""
+        """Clear the session cookie.
+
+        A foreign origin is refused here for the same reason it is refused on
+        every other write: signing you out *is* one. It changes state you did not
+        ask to have changed, and "which origin may write" has always been this
+        server's answer to that. Logging you out is only a nuisance where stopping
+        your session is a loss -- but a nuisance another site can inflict is still
+        a thing another site can do, and the rule already existed to say no.
+
+        Nothing else can be refused: whether or not you had a session, whether or
+        not the cookie was valid, the answer to "clear it" is yes.
+        """
         assert self._auth is not None
+        try:
+            self._require_allowed_origin()
+        except BadRequest as refusal:
+            self._send_json(refusal.status, {"error": refusal.message})
+            return
+
         self._send_json(
             HTTPStatus.OK,
             {"ok": True},
@@ -501,12 +653,18 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     # -- api ----------------------------------------------------------------
 
-    def _serve_json(self, build: Any, what: str) -> None:
+    def _serve_json(
+        self, build: Any, what: str, extra: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Build a payload and send it, turning tracker errors into HTTP 500s.
 
         A corrupt ``current.json`` is a real condition the UI must be able to
         show, so it becomes a JSON error body rather than a stack trace on the
         terminal and a hung spinner in the browser.
+
+        ``extra`` is merged into the payload afterwards: it carries what the
+        *server* knows and the payload builder does not, which today is the one
+        field ``login``.
         """
         try:
             payload = build(self._storage)
@@ -516,6 +674,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 {"error": str(exc), "what": what},
             )
             return
+        if extra:
+            payload.update(extra)
         self._send_json(HTTPStatus.OK, payload)
 
     def _send_json(
@@ -563,8 +723,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             candidate = candidate / "index.html"
         return candidate
 
-    def _serve_static(self, path: str) -> None:
-        """Serve a file from the built React app."""
+    def _serve_static(self, path: str, *, index_fallback: bool = True) -> None:
+        """Serve a file from the built React app.
+
+        ``index_fallback`` is the single-page app's rule: an unknown path is the
+        client router's business, so it is answered with ``index.html`` rather
+        than a 404. It is turned *off* for a visitor without the password, for
+        whom the shell is not a fallback to be reached by any URL that misses --
+        it is one route, :data:`DEMO_PATH`, and a miss is a miss.
+        """
         if not DIST_DIR.is_dir():
             self._send_html(
                 HTTPStatus.OK,
@@ -577,9 +744,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_html(HTTPStatus.FORBIDDEN, "<h1>403 Forbidden</h1>")
             return
 
-        # Single-page app: an unknown path is the client router's business, so
-        # fall back to index.html rather than 404-ing.
         if not target.is_file():
+            if not index_fallback:
+                self._send_html(HTTPStatus.NOT_FOUND, "<h1>404 Not Found</h1>")
+                return
             target = DIST_DIR / "index.html"
             if not target.is_file():
                 self._send_html(HTTPStatus.NOT_FOUND, "<h1>404 Not Found</h1>")
