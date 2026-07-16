@@ -1,5 +1,6 @@
 import { formatDuration, formatTime } from '../lib/format.js'
 import { baseOf, hourLabel, minutesOf, positionOf, segmentsOf, spanOf } from '../lib/timeline.js'
+import Num from './Num.jsx'
 
 /**
  * One session, drawn as a band on the shared time-of-day axis.
@@ -8,8 +9,9 @@ import { baseOf, hourLabel, minutesOf, positionOf, segmentsOf, spanOf } from '..
  * through — because that is what a pause is. Reading the strip left to right is
  * reading the day: when it began, where it broke, when it ended.
  *
- * A live session gets a lit edge at its leading end. It is the only warm colour
- * on the page, so the only thing still moving is the only thing that is warm.
+ * A live session gets a lit edge at its leading end. It shares the accent's hue
+ * rather than opposing it, so it is told apart by being lighter, by breathing,
+ * and by standing proud of the strip at both ends.
  */
 export default function Strip({ session, axis, live = false }) {
   const segments = segmentsOf(session)
@@ -66,7 +68,7 @@ export function Ruler({ axis }) {
     <div className="ruler" aria-hidden="true">
       {axis.ticks.map((tick) => (
         <span key={tick} className="ruler__tick" style={{ left: `${positionOf(tick, axis)}%` }}>
-          {hourLabel(tick)}
+          <Num>{hourLabel(tick)}</Num>
         </span>
       ))}
     </div>

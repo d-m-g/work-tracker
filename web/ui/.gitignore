@@ -3,3 +3,11 @@ node_modules/
 
 # Build output, produced by `npm run build`.
 dist/
+
+# Zodiak itself, which is licensed and not ours to redistribute. Its EULA
+# (public/fonts/FFL.txt, section 02) forbids "uploading them in a public
+# server", and this repository is public -- so the binaries stay out of it and
+# reach the VM inside dist/ instead. public/fonts/README.md says how to get
+# them. Do not remove these two lines to "fix" a failing build.
+public/fonts/*.woff2
+public/fonts/*.woff

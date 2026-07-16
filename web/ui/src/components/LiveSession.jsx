@@ -1,5 +1,6 @@
 import { formatDuration, formatTime } from '../lib/format.js'
 import Controls, { StartForm } from './Controls.jsx'
+import Num from './Num.jsx'
 import Strip, { Ruler } from './Strip.jsx'
 import TaskField from './TaskField.jsx'
 
@@ -16,8 +17,10 @@ function Clock({ seconds, held }) {
 
   return (
     <p className={`clock ${held ? 'clock--held' : ''}`}>
-      {text.slice(0, cut)}
-      <span className="clock__seconds">{text.slice(cut)}</span>
+      <Num>{text.slice(0, cut)}</Num>
+      <span className="clock__seconds">
+        <Num>{text.slice(cut)}</Num>
+      </span>
     </p>
   )
 }
@@ -82,18 +85,23 @@ export default function LiveSession({ status, axis, busy, send }) {
       <dl className="figures">
         <div>
           <dt>Paused</dt>
-          <dd>{formatDuration(status.pausedSeconds)}</dd>
+          <dd>
+            <Num>{formatDuration(status.pausedSeconds)}</Num>
+          </dd>
         </div>
         <div>
           <dt>Breaks</dt>
           <dd>
-            {status.pauseCount}
+            <Num>{status.pauseCount}</Num>
+            {/* Prose, not a measurement, so it keeps its natural figures. */}
             {status.pauseInProgress && <span className="dim"> +1 open</span>}
           </dd>
         </div>
         <div>
           <dt>On the clock</dt>
-          <dd>{formatDuration(status.grossSeconds)}</dd>
+          <dd>
+            <Num>{formatDuration(status.grossSeconds)}</Num>
+          </dd>
         </div>
       </dl>
     </section>

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { formatCompact, formatDate, formatDuration, formatTime } from '../lib/format.js'
+import Num from './Num.jsx'
 import Strip, { Ruler } from './Strip.jsx'
 import TaskField from './TaskField.jsx'
 
@@ -32,7 +33,9 @@ function Day({ session, axis, index, send }) {
             {session.task || 'no task'}
           </span>
         </span>
-        <span className="day__worked">{formatDuration(session.workedSeconds)}</span>
+        <span className="day__worked">
+          <Num>{formatDuration(session.workedSeconds)}</Num>
+        </span>
         <span className="day__strip">
           <Strip session={session} axis={axis} />
         </span>
@@ -55,9 +58,11 @@ function Day({ session, axis, index, send }) {
               {session.pauses.map((pause, position) => (
                 <li key={`${pause.start}-${position}`}>
                   <span className="dim">
-                    {formatTime(pause.start)} – {formatTime(pause.end)}
+                    <Num>{formatTime(pause.start)}</Num> – <Num>{formatTime(pause.end)}</Num>
                   </span>
-                  <span>{formatDuration(pause.seconds)}</span>
+                  <span>
+                    <Num>{formatDuration(pause.seconds)}</Num>
+                  </span>
                 </li>
               ))}
             </ol>

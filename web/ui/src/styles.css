@@ -1,72 +1,103 @@
 /*
- * Work Tracker — a timekeeping instrument, not a dashboard.
+ * Work Tracker — the portfolio's editorial voice, wrapped around an instrument.
  *
- * Ink and paper: worked time is ink laid on a track; a pause is the paper showing
- * through, because that is what a pause is. One warm colour exists on the page —
- * the live edge — so the only thing that is still moving is the only thing that
- * is warm.
+ * This page is dark, always: it shares its surfaces, its accent and its Zodiak
+ * with ../portfolio, so the two read as one author's work. The earlier
+ * "ink on paper, one warm colour" scheme is retired — pink is the ink now, and
+ * the live edge is a lighter pink rather than the page's only warm mark. It is
+ * told apart by lightness, by breathing, and by standing proud of the strip,
+ * not by being the one warm thing on a cool page.
  *
- * The palette is validated (OKLCH lightness band, chroma floor, CVD separation,
- * contrast) for both modes; the two data colours below are the passing values.
+ * Zodiak sets everything, numbers included. It is a display serif, so its
+ * figures are proportional and it has no `tnum` feature — a `1` is 500 units
+ * against a `0`'s 708 — which on a clock that reprints once a second means
+ * digits shoving each other sideways on every tick. `font-variant-numeric:
+ * tabular-nums` cannot help: there is no feature in the font for it to switch
+ * on, and recutting one in is what Zodiak's licence forbids (public/fonts/
+ * FFL.txt, sections 02 and 05). So the digits are given equal cells in CSS
+ * instead, by components/Num.jsx, and the font ships exactly as ITF made it.
+ * Only <code> stays monospaced: a shell command is not a number, and it should
+ * look like something you type.
  */
 
+/* Zodiak, exactly as ../portfolio ships it and as ITF made it. The binaries are
+   not in this repository — see public/fonts/README.md. */
+@font-face {
+  font-family: 'Zodiak';
+  src:
+    url('/fonts/Zodiak-Variable.woff2') format('woff2'),
+    url('/fonts/Zodiak-Variable.woff') format('woff');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --paper: #e9ebef;
-  --card: #ffffff;
-  --ink: #16191f;
-  --ink-2: #656d7a;
-  --rule: #d6dae1;
-  --track: #dee2e8;
+  /* Surfaces and text, straight from the portfolio's @theme. */
+  --paper: #101014; /* portfolio --color-ink */
+  --card: #17171c; /* portfolio --color-surface */
+  --ink: #fafafa; /* portfolio --color-foreground */
+  --ink-2: #a1a1aa; /* portfolio --color-muted */
+  --rule: #26262c; /* portfolio --color-border */
+  --track: #26262c;
 
-  --work: #2f5597; /* validated, light */
-  --live: #b26a00; /* validated, light */
+  --work: #ec4899; /* portfolio --color-accent */
+  --live: #f472b6; /* portfolio --color-accent-soft */
+  --on-work: #0a0a0c; /* portfolio --color-on-accent — 6.2:1 on the accent */
 
-  /* The label on a filled button. It flips with the mode rather than staying
-     white, because white on the *dark* mode's lighter blue is 3.82:1 — under the
-     4.5:1 a button label has to clear. Here it is 7.32:1; below, 4.91:1. */
-  --on-work: #ffffff;
-
-  --fault: #a03027;
-  --fault-bg: #f8e9e7;
+  /* A fault is red, not pink — but pink is now the brand, and red beside
+     magenta is a weak signal on its own. What actually separates them is that a
+     fault always arrives as a filled block of colour, which the accent never
+     does. Hue is the hint; the block is the message. */
+  --fault: #f87171;
+  --fault-bg: #2a1618;
 
   --strip-h: 12px;
   --radius: 3px;
 
-  /* The hero card is the one surface lifted off the paper — a whisper of a
-     shadow, not a drop-shadow, so it reads as raised card stock rather than a
-     floating panel. Everything else stays flat on the page. */
-  --lift: 0 1px 2px rgba(20, 25, 35, 0.04), 0 14px 34px -20px rgba(20, 25, 35, 0.32);
-  /* The tint a history row wears under the pointer, so a clickable row looks
-     clickable before you find the cursor. Cut from the work hue, kept faint. */
-  --row-hover: rgba(47, 85, 151, 0.05);
+  /* The hero card is the one surface lifted off the page. Dark rooms show a
+     shadow less and a light edge more, so this stays deep and soft. */
+  --lift: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 38px -20px rgba(0, 0, 0, 0.6);
+  /* The tint a history row wears under the pointer. Cut from the accent. */
+  --row-hover: rgba(236, 72, 153, 0.09);
 
-  /* An instrument panel: geometric caps for labels, mono for every number. */
-  --face-label: 'Avenir Next', 'Futura', ui-sans-serif, system-ui, sans-serif;
-  --face-data: ui-monospace, 'SF Mono', Menlo, monospace;
-  --face-body: system-ui, -apple-system, sans-serif;
+  --face-display: 'Zodiak', ui-serif, Georgia, serif;
+  --face-label: 'Zodiak', ui-serif, Georgia, serif;
+  --face-body: 'Zodiak', ui-serif, Georgia, serif;
+  /* The same face — the name marks intent, and is where the numeric treatment
+     below hangs. */
+  --face-data: 'Zodiak', ui-serif, Georgia, serif;
+  --face-code: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* One digit cell, wide enough for the widest figure Zodiak has. Measured, not
+     guessed: at the weights this page renders (400, 500) a `0` is the widest at
+     ~0.70em, so 0.72em holds any digit with a hair of air either side. */
+  --digit: 0.72em;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #131519;
-    --card: #1a1d23;
-    --ink: #e8ebf1;
-    --ink-2: #8b93a1;
-    --rule: #2a2e36;
-    --track: #24282f;
+/* Numbers, wherever they are read as measurements rather than prose.
+ *
+ * Kerning goes off here for one reason: the digits carry no kern pairs but the
+ * colon does, so `4:00:00` sets half a pixel wider than `4:17:32` and the
+ * seconds twitch as they tick. These elements hold numerals and colons only, so
+ * there is no prose here for kerning to be doing any good. */
+.clock,
+.figures dd,
+.day__worked,
+.ruler__tick,
+.breaks li {
+  font-family: var(--face-data);
+  font-kerning: none;
+}
 
-    --work: #4f82d6; /* validated, dark */
-    --live: #c0801f; /* validated, dark */
-    --on-work: #101216;
-
-    --fault: #f08d81;
-    --fault-bg: #33201d;
-
-    /* Darker rooms show a shadow less and a light edge more; the lift deepens
-       and the hover tint borrows the brighter dark-mode work hue. */
-    --lift: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 38px -20px rgba(0, 0, 0, 0.6);
-    --row-hover: rgba(79, 130, 214, 0.09);
-  }
+/* What makes the figures tabular, since the font may not be altered to do it —
+   see components/Num.jsx. Every digit gets the same cell and sits in the middle
+   of it, so a `1` occupies exactly what a `0` does and nothing moves when one
+   becomes the other. */
+.digit {
+  display: inline-block;
+  width: var(--digit);
+  text-align: center;
 }
 
 * {
@@ -75,14 +106,49 @@
 
 body {
   margin: 0;
-  background: var(--paper);
+  background-color: var(--paper);
   color: var(--ink);
-  font: 15px/1.55 var(--face-body);
+  font-family: var(--face-body);
+  font-size: 15px;
+  line-height: 1.55;
+  /* Zodiak's fine high-contrast strokes read as thin at body size; 500 gives
+     them back their weight. Matches the portfolio. */
+  font-weight: 500;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The portfolio's blurred accent wash, fixed behind everything. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.15;
+  background: url('/bg-gradient.svg') center / 80% auto no-repeat var(--paper);
+  filter: blur(40px) saturate(1.1);
+}
+
+/* Grain, so the dark is a surface rather than a void. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.025;
+  background-image: radial-gradient(#fafafa 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+::selection {
+  background: var(--work);
+  color: var(--on-work);
 }
 
 code {
-  font-family: var(--face-data);
+  font-family: var(--face-code);
   font-size: 0.88em;
   color: var(--ink-2);
 }
@@ -91,7 +157,8 @@ code {
   color: var(--ink-2);
 }
 
-/* Every label on the page is a stamped caption, not a heading. */
+/* Every label on the page is a stamped caption, not a heading. Zodiak's caps,
+   tracked out wide, are what make it read as editorial rather than as chrome. */
 .eyebrow {
   margin: 0;
   font-family: var(--face-label);
@@ -102,7 +169,10 @@ code {
   color: var(--ink-2);
 }
 
+/* Above the fixed grain, which is painted at z-index 0. */
 .page {
+  position: relative;
+  z-index: 1;
   max-width: 50rem;
   margin: 0 auto;
   padding: 4rem 1.5rem 5rem;
@@ -110,18 +180,23 @@ code {
 
 .masthead {
   margin-bottom: 3rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--rule);
 }
 
+/* The masthead is the one place Zodiak is allowed to be a display face rather
+   than a working one: full size, tight, with the accent under it. */
 .masthead h1 {
   margin: 0;
-  font-family: var(--face-label);
-  font-size: 1.15rem;
+  font-family: var(--face-display);
+  font-size: clamp(1.9rem, 5vw, 2.4rem);
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 .masthead p {
-  margin: 0.15rem 0 0;
+  margin: 0.35rem 0 0;
   font-size: 0.85rem;
 }
 
@@ -155,9 +230,8 @@ code {
   text-transform: uppercase;
 }
 
-/* The word is ink; the dot carries the colour. Text never wears the data hue —
-   it would be the one low-contrast string on the page, and colour alone is not
-   an encoding anyone can rely on. */
+/* The word is text; the dot carries the colour. Colour alone is not an encoding
+   anyone can rely on, so the state is always spelled out. */
 .state--running {
   color: var(--ink);
 }
@@ -177,14 +251,16 @@ code {
   animation: breathe 2.4s ease-in-out infinite;
 }
 
+/* The number you read, and it must not move while you read it — which is the
+   whole reason its digits are celled. Zodiak's figures are wide and generously
+   spaced next to a mono's, so the tracking comes in a little to keep the clock
+   from sprawling. */
 .clock {
   margin: 0.75rem 0 0;
-  font-family: var(--face-data);
   font-size: clamp(3rem, 11vw, 4.75rem);
-  font-weight: 400;
-  letter-spacing: -0.035em;
+  font-weight: 500;
+  letter-spacing: -0.02em;
   line-height: 1;
-  font-variant-numeric: tabular-nums; /* digits stop jittering as they tick */
 }
 
 /* The minutes are what you read; the seconds only prove it is alive. */
@@ -209,8 +285,7 @@ code {
 /* ---------- writing it down ---------- */
 
 /* The task reads as a line of text, not as a form field: no box, no chrome, just
-   the sentence — until you point at it, when it admits it can be edited. An
-   instrument's engraved field, not a web form. */
+   the sentence — until you point at it, when it admits it can be edited. */
 .task {
   display: flex;
   align-items: baseline;
@@ -323,20 +398,14 @@ code {
   filter: brightness(1.08);
 }
 
-.btn:focus-visible {
-  outline: 2px solid var(--work);
-  outline-offset: 2px;
-}
-
 /* The one filled button: the thing you came to press. */
 .btn--go {
   background: var(--work);
   color: var(--on-work);
 }
 
-/* Stop is not painted red. Ending the day is not an error, and the page has one
-   warm colour on it already — the live edge — which is the only thing that should
-   be catching your eye. Weight, not hue, is what sets this button apart. */
+/* Stop is not painted red. Ending the day is not an error, and red on this page
+   means a fault. Weight, not hue, is what sets this button apart. */
 .btn--stop {
   background: none;
   border-color: var(--rule);
@@ -368,9 +437,7 @@ code {
 
 .figures dd {
   margin: 0.25rem 0 0;
-  font-family: var(--face-data);
   font-size: 1.05rem;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- the strip: the signature ---------- */
@@ -385,8 +452,7 @@ code {
   position: absolute;
   top: 0;
   transform: translateX(-50%);
-  font-family: var(--face-data);
-  font-size: 0.65rem;
+  font-size: 0.68rem;
   color: var(--ink-2);
   white-space: nowrap;
 }
@@ -414,7 +480,7 @@ code {
 
 .strip__seg--work {
   background: var(--work);
-  /* A 2px surface gap keeps abutting blocks legible as separate blocks. */
+  /* A surface-coloured gap keeps abutting blocks legible as separate blocks. */
   box-shadow: 0 0 0 1.5px var(--card);
 }
 
@@ -427,7 +493,9 @@ code {
   filter: brightness(1.12);
 }
 
-/* The one warm mark on the page: where the day has got to, right now. */
+/* Where the day has got to, right now. It shares the accent's hue, so it earns
+   its separation three other ways: it is lighter, it breathes, and it stands
+   proud of the strip at both ends. */
 .strip__edge {
   position: absolute;
   top: -3px;
@@ -507,13 +575,7 @@ code {
 .day__row:hover .day__date {
   text-decoration: underline;
   text-underline-offset: 3px;
-  text-decoration-color: var(--rule);
-}
-
-.day__row:focus-visible {
-  outline: 2px solid var(--work);
-  outline-offset: 3px;
-  border-radius: 4px;
+  text-decoration-color: var(--work);
 }
 
 .day__date {
@@ -523,15 +585,16 @@ code {
   min-width: 0;
   padding-right: 1rem;
   font-family: var(--face-label);
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   transition: color 0.12s ease;
 }
 
-/* The task rides under the date: body face, not the label face, because it is the
-   one string on this row that is *yours* rather than the instrument's. It
-   truncates here and is shown in full when the row is opened. */
+/* The task rides under the date, lighter than it: it is the one string on this
+   row that is *yours* rather than the instrument's. It truncates here and is
+   shown in full when the row is opened. No colour is set — the markup dims this
+   only when there is no task to show, and that contrast is the point. */
 .day__task {
   overflow: hidden;
   font-family: var(--face-body);
@@ -551,9 +614,7 @@ code {
 }
 
 .day__worked {
-  font-family: var(--face-data);
   font-size: 0.95rem;
-  font-variant-numeric: tabular-nums;
 }
 
 .day__strip {
@@ -561,6 +622,8 @@ code {
   padding-right: 1rem;
 }
 
+/* Words, not a number ("unbroken", "2 breaks") — so this stays in the voice
+   face, not the data face. The markup dims it. */
 .day__breaks {
   font-family: var(--face-label);
   font-size: 0.7rem;
@@ -579,9 +642,7 @@ code {
   justify-content: space-between;
   max-width: 20rem;
   padding: 0.25rem 0;
-  font-family: var(--face-data);
   font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
 }
 
 .empty {
@@ -592,14 +653,15 @@ code {
 /* ---------- faults, and refusals ---------- */
 
 /* A refusal wears the same colour as a fault, exactly as it does in the widget:
-   "the tracker said no" is one idea, and it should look the same wherever you meet
-   it. It is not a crash and it is not styled like one — but it *is* the tracker
-   declining to do what you asked, and that must never be quiet. */
+   "the tracker said no" is one idea, and it should look the same wherever you
+   meet it. It is not a crash and it is not styled like one — but it *is* the
+   tracker declining to do what you asked, and that must never be quiet. */
 .fault,
 .faults,
 .refusal {
   background: var(--fault-bg);
   color: var(--fault);
+  border: 1px solid rgba(248, 113, 113, 0.2);
   border-radius: 8px;
   padding: 0.8rem 1rem;
   font-size: 0.85rem;
@@ -617,6 +679,17 @@ code {
 
 .fault code {
   color: inherit;
+}
+
+/* ---------- focus ---------- */
+
+/* One focus ring for the whole page, in the accent — matching the portfolio.
+   No border-radius here: this rule ties with .btn on specificity and wins by
+   order, so setting one would snap a focused button's corners from 6px to 2px.
+   The outline already follows each element's own radius. */
+:focus-visible {
+  outline: 2px solid var(--work);
+  outline-offset: 3px;
 }
 
 /* ---------- motion ---------- */

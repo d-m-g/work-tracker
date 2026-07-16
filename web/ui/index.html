@@ -3,8 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="dark" />
     <title>Work Tracker</title>
+    <!-- Zodiak carries every word on the page, so fetch it with the stylesheet
+         rather than after it: without this the whole UI paints in fallback
+         Georgia first and reflows once Zodiak lands. -->
+    <link
+      rel="preload"
+      href="/fonts/Zodiak-Variable.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
   </head>
   <body>
     <div id="root"></div>
