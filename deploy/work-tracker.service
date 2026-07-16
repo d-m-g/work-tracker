@@ -1,0 +1,29 @@
+# systemd unit for the work-tracker viewer.
+#
+# Runs the Python server bound to loopback (Caddy is the public face), requiring
+# a password. It restarts on crash and comes back after a reboot.
+#
+# Assumes the repo is at /home/ubuntu/work-tracker and a password hash has been
+# written to /home/ubuntu/work-tracker/.password  (python3 -m web.auth --write .password).
+#
+# Install:
+#   sudo cp deploy/work-tracker.service /etc/systemd/system/work-tracker.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now work-tracker
+
+[Unit]
+Description=work-tracker viewer
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/work-tracker
+ExecStart=/usr/bin/python3 web/server.py \
+    --host 127.0.0.1 --port 8765 \
+    --password-file /home/ubuntu/work-tracker/.password \
+    --allow-origin tracker.d-m-g.dev
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

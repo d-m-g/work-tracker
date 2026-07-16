@@ -15,3 +15,15 @@ __pycache__/
 # sessions/.gitkeep is tracked so the directory itself survives a clone.
 /current.json
 /sessions/*.json
+
+# SSH keys and any other deploy secrets kept alongside the repo for convenience.
+# The private key to the server lives here; it must never be committed.
+/.secrets/
+
+# Login secrets, when the viewer runs with a password. The signing secret and
+# the password hash live in the data directory (again, the repo by default);
+# committing either would defeat the point. Never track these.
+/.session_secret
+/.password
+.session_secret
+.password

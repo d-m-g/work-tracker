@@ -3,8 +3,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 /** How often the live session is polled, in milliseconds. */
 const STATUS_INTERVAL = 1000
 
+/**
+ * A 401 means the session is gone — it expired, or someone logged out. The
+ * server now serves the login page at every path, so a reload swaps this whole
+ * app out for that form. The returned promise never settles: the reload is
+ * already taking over, and nothing after this should run.
+ */
+function reloadForLogin() {
+  window.location.reload()
+  return new Promise(() => {})
+}
+
 async function getJSON(url) {
   const response = await fetch(url, { cache: 'no-store' })
+  if (response.status === 401) return reloadForLogin()
+
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
@@ -21,6 +34,8 @@ async function postJSON(url, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   })
+  if (response.status === 401) return reloadForLogin()
+
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {

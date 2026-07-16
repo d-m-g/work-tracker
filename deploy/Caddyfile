@@ -1,0 +1,18 @@
+# Caddy reverse proxy for the work-tracker viewer.
+#
+# Caddy sits in front on 80/443, fetches and renews a Let's Encrypt certificate
+# for the hostname below on its own, terminates TLS, and forwards to the Python
+# server bound to loopback on :8765. The login itself lives in the app (run it
+# with --password-file), so no basicauth is needed here -- Caddy's only jobs are
+# HTTPS and forwarding.
+#
+# Prerequisites before this can get a certificate:
+#   * an A record for the hostname -> this VM's public IP, and
+#   * ports 80 and 443 open in BOTH the Oracle VCN security list and the OS
+#     firewall (iptables).
+#
+# Install to /etc/caddy/Caddyfile, then: sudo systemctl reload caddy
+
+tracker.d-m-g.dev {
+	reverse_proxy 127.0.0.1:8765
+}

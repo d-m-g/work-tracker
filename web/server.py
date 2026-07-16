@@ -35,6 +35,19 @@ resolves to 127.0.0.1 but its origin still says ``evil.example``. Reads are left
 alone: there is nothing to protect against there that binding to loopback has not
 already handled.
 
+**A password is what makes it safe to put on the internet.** Everything above
+protects a *loopback* tool from the other tabs in your browser. Reaching it from
+the open network is a different question -- who may look at all -- and the answer
+is a login. Configure a password (``--password-file``, or the
+``WORK_TRACKER_PASSWORD_HASH`` environment variable) and every request, read or
+write, must carry a session cookie the server signed; an unauthenticated browser
+receives the login form and nothing else. The mechanism lives in :mod:`web.auth`,
+kept pure and tested there. With no password configured the server runs open,
+exactly as it always did -- so the local CLI-and-Shortcuts workflow is unchanged,
+and the switch is thrown only when you deploy. See :func:`_build_auth`, which
+*fails closed*: naming a password file that turns out to be empty stops the
+server rather than quietly starting it unprotected.
+
 **Driving it from another device is opt-in, and off by default.** To control the
 tracker from a phone you widen both locks yourself, on purpose: ``--host`` to
 listen somewhere the device can reach, and ``--allow-origin HOST`` to let that
@@ -55,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from functools import partial
 from http import HTTPStatus
@@ -80,6 +94,12 @@ from web.api import (  # noqa: E402
     build_sessions_payload,
     build_status_payload,
     run_command,
+)
+from web.auth import (  # noqa: E402
+    Authenticator,
+    load_or_create_secret,
+    load_password_hash,
+    throttle_key,
 )
 
 #: Where `npm run build` puts the compiled React app.
@@ -201,6 +221,60 @@ npm run build</pre>
 </body></html>
 """
 
+#: Shown at every path when a password is configured and the request is not
+#: logged in. It is a whole self-contained page -- no bundle, no assets -- so it
+#: can be served *instead of* the app: an unauthenticated browser never receives
+#: a single byte of the tracker, only this form. The form posts JSON to
+#: /api/login and, on success, reloads to receive the app it could not see before.
+_LOGIN_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Work Tracker — sign in</title>
+<style>
+ body{font:16px/1.6 -apple-system,system-ui,sans-serif;max-width:22rem;
+      margin:18vh auto;padding:0 1.5rem;color:#1d1d1f}
+ h1{font-size:1.3rem;margin:0 0 .25rem}
+ p.dim{color:#6b6b70;margin:.25rem 0 1.5rem}
+ form{display:flex;flex-direction:column;gap:.75rem}
+ input,button{font:inherit;padding:.6rem .75rem;border-radius:8px;
+      border:1px solid #c9c9ce}
+ input{background:#fff}
+ button{border:none;background:#0071e3;color:#fff;font-weight:600;cursor:pointer}
+ button:disabled{opacity:.5;cursor:default}
+ p.err{color:#c1121f;min-height:1.6em;margin:.5rem 0 0}
+ @media(prefers-color-scheme:dark){
+   body{background:#151517;color:#f2f2f7}
+   input{background:#252529;border-color:#3a3a3f;color:#f2f2f7}
+   p.dim{color:#9a9aa0}}
+</style></head>
+<body>
+ <h1>Work Tracker</h1>
+ <p class="dim">Enter the password to continue.</p>
+ <form id="f">
+   <input id="pw" type="password" name="password" placeholder="Password"
+          autocomplete="current-password" autofocus required>
+   <button id="go" type="submit">Sign in</button>
+ </form>
+ <p class="err" id="err" role="alert"></p>
+<script>
+ const f=document.getElementById('f'),pw=document.getElementById('pw'),
+       go=document.getElementById('go'),err=document.getElementById('err');
+ f.addEventListener('submit',async e=>{
+   e.preventDefault();err.textContent='';go.disabled=true;
+   try{
+     const r=await fetch('/api/login',{method:'POST',
+       headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({password:pw.value})});
+     if(r.ok){location.reload();return}
+     const b=await r.json().catch(()=>null);
+     err.textContent=(b&&b.error)||('Sign in failed ('+r.status+')');
+   }catch(_){err.textContent='Could not reach the server.'}
+   go.disabled=false;pw.select();
+ });
+</script>
+</body></html>
+"""
+
 
 class ViewerHandler(BaseHTTPRequestHandler):
     """Serves the JSON API and the static React bundle. ``GET`` reads, ``POST`` writes."""
@@ -214,18 +288,36 @@ class ViewerHandler(BaseHTTPRequestHandler):
         *args: Any,
         storage: Storage,
         allowed_origins: frozenset = _LOCAL_ORIGINS,
+        auth: Optional[Authenticator] = None,
         **kwargs: Any,
     ) -> None:
         # Bound before super().__init__, which handles the request immediately.
         self._storage = storage
         self._allowed_origins = allowed_origins
+        # When None, the viewer runs open, exactly as it did before login existed.
+        # When set, every request must carry a valid session or be turned away.
+        self._auth = auth
         super().__init__(*args, **kwargs)
 
     # -- routing ------------------------------------------------------------
 
     def do_GET(self) -> None:  # noqa: N802 (name mandated by BaseHTTPRequestHandler)
-        """Route a GET: the two read endpoints, or the built UI."""
+        """Route a GET: the two read endpoints, or the built UI.
+
+        When a password is configured, an unauthenticated GET never reaches any
+        of that. An API path is answered with a bare 401; anything else is
+        answered with the login page, served *in place of* the app -- so the
+        browser of someone without the password receives the form and nothing
+        else, not a single line of the tracker's own markup or data.
+        """
         path = urlparse(self.path).path
+
+        if self._auth is not None and not self._authenticated():
+            if path.startswith("/api/"):
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "authentication required"})
+            else:
+                self._send_html(HTTPStatus.OK, _LOGIN_PAGE)
+            return
 
         if path == "/api/status":
             self._serve_json(build_status_payload, "status")
@@ -251,6 +343,20 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if not path.startswith("/api/"):
             self._send_json(HTTPStatus.NOT_FOUND, {"error": f"no such endpoint: {path}"})
             return
+
+        # Login and logout only exist when a password is configured, and login
+        # is the one write that runs *before* the session check -- it is how you
+        # get a session in the first place. Everything past here needs one.
+        if self._auth is not None:
+            if path == "/api/login":
+                self._handle_login()
+                return
+            if path == "/api/logout":
+                self._handle_logout()
+                return
+            if not self._authenticated():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "authentication required"})
+                return
 
         try:
             self._require_allowed_origin()
@@ -323,6 +429,76 @@ class ViewerHandler(BaseHTTPRequestHandler):
             )
         return payload
 
+    # -- auth ---------------------------------------------------------------
+
+    def _authenticated(self) -> bool:
+        """True if this request carries a session cookie the server signed.
+
+        Only called when :attr:`_auth` is set, so the attribute access is safe.
+        """
+        assert self._auth is not None
+        return self._auth.is_authenticated(self.headers.get("Cookie"))
+
+    def _client_key(self) -> str:
+        """The key the login throttle counts failures against -- the client IP.
+
+        Behind the intended loopback proxy the raw peer is always 127.0.0.1, so
+        the real client is taken from a trusted ``X-Forwarded-For``. See
+        :func:`web.auth.throttle_key` for exactly when that header is believed.
+        """
+        peer = self.client_address[0] if self.client_address else None
+        return throttle_key(peer, self.headers.get("X-Forwarded-For"))
+
+    def _handle_login(self) -> None:
+        """Check a password and, if it is right, hand back a session cookie.
+
+        The order is deliberate. The throttle is consulted *first*, so a locked-out
+        client is turned away with a 429 before its guess is ever compared -- the
+        lockout cannot be worn down by continuing to guess. Only then is the
+        origin checked and the body read, and only then the password. A wrong
+        password is a 401 with a message written for the person, never a hint at
+        how close they were; every wrong answer is the same wrong answer.
+        """
+        assert self._auth is not None
+        client = self._client_key()
+
+        wait = self._auth.throttle.retry_after(client)
+        if wait > 0:
+            self._send_json(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                {"error": "too many attempts; wait a few minutes and try again"},
+                extra_headers={"Retry-After": str(int(wait) + 1)},
+            )
+            return
+
+        try:
+            self._require_allowed_origin()
+            body = self._read_body()
+        except BadRequest as refusal:
+            self._send_json(refusal.status, {"error": refusal.message})
+            return
+
+        if not self._auth.verify_login(body.get("password")):
+            self._auth.throttle.record_failure(client)
+            self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "wrong password"})
+            return
+
+        self._auth.throttle.record_success(client)
+        self._send_json(
+            HTTPStatus.OK,
+            {"ok": True},
+            extra_headers={"Set-Cookie": self._auth.session_cookie()},
+        )
+
+    def _handle_logout(self) -> None:
+        """Clear the session cookie. Always succeeds; there is nothing to refuse."""
+        assert self._auth is not None
+        self._send_json(
+            HTTPStatus.OK,
+            {"ok": True},
+            extra_headers={"Set-Cookie": self._auth.logout_cookie()},
+        )
+
     # -- api ----------------------------------------------------------------
 
     def _serve_json(self, build: Any, what: str) -> None:
@@ -342,8 +518,17 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         self._send_json(HTTPStatus.OK, payload)
 
-    def _send_json(self, status: HTTPStatus, payload: Dict[str, Any]) -> None:
-        """Serialise ``payload`` and write it with no-cache headers."""
+    def _send_json(
+        self,
+        status: HTTPStatus,
+        payload: Dict[str, Any],
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Serialise ``payload`` and write it with no-cache headers.
+
+        ``extra_headers`` carries the one header the login flow adds -- a
+        ``Set-Cookie`` that hands the browser its session, or clears it.
+        """
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -351,6 +536,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
         # The status endpoint is polled once a second; a cached response would
         # freeze the timer in the browser.
         self.send_header("Cache-Control", "no-store")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -437,16 +624,27 @@ class ViewerHandler(BaseHTTPRequestHandler):
         sys.stderr.write("  %s\n" % (format % args))
 
 
-def serve(root: Path, host: str, port: int, allow_origins: frozenset = frozenset()) -> int:
+def serve(
+    root: Path,
+    host: str,
+    port: int,
+    allow_origins: frozenset = frozenset(),
+    auth: Optional[Authenticator] = None,
+) -> int:
     """Run the server until interrupted. Returns a process exit code.
 
     ``allow_origins`` is the *extra* hosts a write may come from, on top of this
     machine. Empty by default, which is the shipped behaviour: writes from
     anywhere but loopback are refused.
+
+    ``auth`` is the login guard. ``None`` runs the viewer open, as it always was;
+    an :class:`~web.auth.Authenticator` requires a password on every request.
     """
     storage = Storage(root)
     allowed = _LOCAL_ORIGINS | allow_origins
-    handler = partial(ViewerHandler, storage=storage, allowed_origins=allowed)
+    handler = partial(
+        ViewerHandler, storage=storage, allowed_origins=allowed, auth=auth
+    )
 
     try:
         httpd = ThreadingHTTPServer((host, port), handler)
@@ -456,13 +654,21 @@ def serve(root: Path, host: str, port: int, allow_origins: frozenset = frozenset
 
     print(f"work-tracker viewer -> http://{host}:{port}")
     print(f"data directory      -> {root}")
+    print(f"authentication      -> {'password required' if auth else 'none (open)'}")
     if allow_origins:
         print(f"writes allowed from -> {', '.join(sorted(allow_origins))} (and this machine)")
-    if host not in _LOCAL_ORIGINS:
+    if host not in _LOCAL_ORIGINS and auth is None:
+        # Reachable from the network *and* no password: anyone who finds the port
+        # can read your hours and start or stop sessions. This is the one
+        # configuration worth refusing to be quiet about.
+        print(f"WARNING: {host} is reachable off this machine and NO password is set --")
+        print("         anyone who can reach this port can read and control your sessions.")
+        print("         Set a password: python3 -m web.auth --write .password, then")
+        print("         restart with --password-file .password")
+    elif host not in _LOCAL_ORIGINS:
         # The server can start and stop sessions now, so a bind address that is
         # not loopback is worth saying out loud rather than leaving to be noticed.
-        print(f"warning: {host} is not loopback -- anyone who can reach this port and pass the")
-        print("         origin check can control your sessions; keep this on a trusted network")
+        print(f"note: {host} is not loopback -- login is required, keep the password strong")
     elif allow_origins:
         # Allowing a remote origin while still bound to loopback is a half-turned
         # key: the guard would let the device through, but it can never reach the
@@ -509,14 +715,80 @@ def main(argv: Optional[List[str]] = None) -> int:
             "work; the port is ignored. This machine is always allowed."
         ),
     )
+    parser.add_argument(
+        "--password-file",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "require a login. PATH holds a password hash from "
+            "'python3 -m web.auth --write PATH'. The environment variable "
+            "WORK_TRACKER_PASSWORD_HASH is used instead if set. With neither, the "
+            "viewer runs open, as before -- which is only safe on loopback."
+        ),
+    )
+    parser.add_argument(
+        "--cookie-insecure",
+        action="store_true",
+        help=(
+            "do not mark the session cookie Secure. Only for testing login over "
+            "plain http on localhost; never use it for a real deployment, where "
+            "TLS (e.g. Caddy in front) makes Secure the right and safe default."
+        ),
+    )
     args = parser.parse_args(argv)
 
     allow_origins = frozenset(_host_of(origin) for origin in args.allow_origin)
+    root = args.root.expanduser()
+
+    auth = _build_auth(root, args.password_file, cookie_secure=not args.cookie_insecure)
+    if auth is _AUTH_MISCONFIGURED:
+        return 1
+
     return serve(
-        root=args.root.expanduser(),
+        root=root,
         host=args.host,
         port=args.port,
         allow_origins=allow_origins,
+        auth=auth,
+    )
+
+
+#: Sentinel: a password file was named but held no usable hash. Distinct from
+#: ``None`` (no login configured, run open), so main() can exit non-zero rather
+#: than silently starting an *unprotected* server the operator meant to protect.
+_AUTH_MISCONFIGURED = object()
+
+
+def _build_auth(
+    root: Path, password_file: Optional[Path], cookie_secure: bool
+) -> Any:
+    """Assemble the login guard from the environment and the ``--password-file``.
+
+    Fails closed: if ``--password-file`` is given but names nothing readable, this
+    returns the :data:`_AUTH_MISCONFIGURED` sentinel so the server refuses to
+    start, rather than falling back to no password and putting an open viewer on
+    the network the operator was trying to lock down. With no password configured
+    at all it returns ``None`` -- the deliberate, documented open mode.
+    """
+    env_hash = os.environ.get("WORK_TRACKER_PASSWORD_HASH")
+    password_hash = load_password_hash(env_hash, password_file)
+
+    if password_file is not None and password_hash is None:
+        print(
+            f"error: --password-file {password_file} has no password hash in it.\n"
+            f"       create one with: python3 -m web.auth --write {password_file}",
+            file=sys.stderr,
+        )
+        return _AUTH_MISCONFIGURED
+
+    if password_hash is None:
+        return None
+
+    secret = load_or_create_secret(root / ".session_secret")
+    return Authenticator(
+        password_hash=password_hash,
+        secret=secret,
+        cookie_secure=cookie_secure,
     )
 
 

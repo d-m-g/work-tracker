@@ -373,6 +373,8 @@ from this Mac and nowhere else — your working hours are nobody else's business
 | `--root DIR` | Read sessions from a different data directory. |
 | `--host H` | Bind address. Leave it alone unless you *want* the network to see it. |
 | `--allow-origin HOST` | Also accept writes from this host, so another device can drive the tracker. Repeatable. This machine is always allowed. See [Driving it from your phone](#driving-it-from-your-phone). |
+| `--password-file PATH` | Require a login. `PATH` holds a password hash (see [Putting it on the public internet](#putting-it-on-the-public-internet-require-a-password)). The `WORK_TRACKER_PASSWORD_HASH` environment variable is used instead if set. |
+| `--cookie-insecure` | Don't mark the session cookie `Secure`. Only for testing login over plain `http` on localhost — never for a real, TLS-terminated deployment. |
 
 If you run the server before building the UI, it says so on the page rather than
 404-ing at you. The API works either way.
@@ -452,6 +454,68 @@ is still the single call into the one `WorkTracker` that the CLI, the Shortcuts 
 the widget all drive. Nothing about the JSON, the atomic writes or the "one writer"
 guarantee changes; the phone is another caller of it, exactly as the local browser
 is.
+
+### Putting it on the public internet (require a password)
+
+Everything above protects a *loopback* tool from the other tabs in your browser.
+A public URL is a different question — *who may look at all* — and the answer is a
+login. The origin check alone is not enough there: it stops a hostile page from
+writing, but anyone who knows the URL could still read your hours, and a script
+sending no `Origin` at all is deliberately allowed. So on the open internet you
+turn on a password, and then **every** request — read or write — must carry a
+session the server signed, or it gets the login form and nothing else.
+
+It is off by default, so nothing above changes until you switch it on. Two steps:
+
+```sh
+# 1. Create a password hash. It prompts; only the hash is ever written.
+python3 -m web.auth --write .password
+
+# 2. Start the server pointing at it. Behind TLS (see below), that's all it needs.
+python3 web/server.py --password-file .password --allow-origin tracker.example.com
+```
+
+The `--allow-origin` is the same flag as for a phone, and it is needed for the
+same reason: the browser at `https://tracker.example.com` stamps that origin on
+every login and every button, and the origin check must let it through. Name the
+host you will actually open the viewer at.
+
+How it holds up, in one breath each:
+
+* **The password is never stored** — only a salted PBKDF2 hash of it, in
+  `.password` (created `0600`, and git-ignored). A leaked data directory does not
+  leak the password.
+* **Sessions are stateless, signed cookies** — `HttpOnly`, `SameSite=Strict`,
+  `Secure`, thirty-day expiry. The server keeps a random secret in
+  `.session_secret` (also `0600` and git-ignored) and signs each session with it;
+  a cookie it did not sign is worthless. Persisting the secret means a reboot does
+  not log you out.
+* **Login is rate-limited** — a handful of wrong guesses from one client and it is
+  locked out for a few minutes, checked *before* the password is, so the lockout
+  cannot be worn down by guessing through it. Behind a reverse proxy the real
+  client is read from a trusted `X-Forwarded-For`, so one attacker cannot lock
+  *you* out.
+* **It fails closed** — point `--password-file` at an empty or missing file and
+  the server refuses to start, rather than quietly coming up with no password on a
+  network you meant to lock down.
+
+**You still need TLS in front.** The server speaks plain `http`; run it bound to
+loopback behind a reverse proxy that terminates HTTPS —
+[Caddy](https://caddyserver.com) does it in a two-line config and fetches the
+certificate itself:
+
+```
+tracker.example.com {
+    reverse_proxy 127.0.0.1:8765
+}
+```
+
+That is what makes the `Secure` cookie and the whole login meaningful; without
+HTTPS a password travels in the clear. (For local testing over `http` only, add
+`--cookie-insecure` so the browser will return the cookie — never in production.)
+
+Rotating the password is `python3 -m web.auth --write .password` again and a
+restart. Deleting `.session_secret` and restarting logs every device out at once.
 
 ### What it shows, and what it lets you do
 
