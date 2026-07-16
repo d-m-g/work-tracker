@@ -169,6 +169,31 @@ code {
   color: var(--ink-2);
 }
 
+/* An iPhone hands a Home Screen web app the whole screen -- iOS 17 opens them
+ * standalone whether they asked to be or not -- so the notch, the status bar and
+ * the home indicator become this stylesheet's problem rather than the browser's.
+ * index.html sets `viewport-fit=cover`, which is what makes these insets report
+ * anything at all; everywhere else they are 0px and every rule below collapses to
+ * exactly what it was.
+ *
+ * The scrim is the half that is easy to miss. Padding keeps the page off the
+ * status bar *at rest*, but the moment you scroll, the text underneath goes right
+ * on up behind the clock and the battery. So the inset strip gets the paper drawn
+ * into it, fixed, above the content: at 0px tall it does not exist, and on a
+ * phone it is the ground the status bar has always been sitting on. */
+html::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top, 0px);
+  background: var(--paper);
+  /* Over the page (z-index 1) -- the point is to be scrolled *under*. */
+  z-index: 5;
+  pointer-events: none;
+}
+
 /* Above the fixed grain, which is painted at z-index 0. */
 .page {
   position: relative;
@@ -176,6 +201,16 @@ code {
   max-width: 50rem;
   margin: 0 auto;
   padding: 4rem 1.5rem 5rem;
+  /* `max`, not `+`: the gutter is already 1.5rem, and a landscape notch wants
+     about 2.75rem. Adding them would push the page a whole thumb off the edge on
+     the one orientation that has the least room; taking the larger gives the
+     notch what it needs and changes nothing when it needs nothing. The top and
+     bottom do add, because there the inset is clearance the page does not
+     otherwise have any of. */
+  padding-top: calc(4rem + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+  padding-left: max(1.5rem, env(safe-area-inset-left, 0px));
+  padding-right: max(1.5rem, env(safe-area-inset-right, 0px));
 }
 
 .masthead {
@@ -952,6 +987,11 @@ code {
 
   .page {
     padding: 2.5rem 1.1rem 3rem;
+    /* The narrow gutter, with the same safe-area arithmetic as the wide one. */
+    padding-top: calc(2.5rem + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(3rem + env(safe-area-inset-bottom, 0px));
+    padding-left: max(1.1rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1.1rem, env(safe-area-inset-right, 0px));
   }
 
   .live {

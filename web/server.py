@@ -304,10 +304,21 @@ npm run build</pre>
 #: wash on it -- because everything load-bearing here is CSS, not an asset.
 _LOGIN_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#101014">
 <title>Work Tracker — sign in</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23101014'/%3E%3Ctext x='50' y='68' font-size='56' font-family='Archivo,sans-serif' font-weight='700' fill='%23EC4899' text-anchor='middle'%3Ed%3C/text%3E%3C/svg%3E">
+<!-- The same icons the app carries, and for the same reasons -- see
+     web/ui/index.html, where they are explained at length. They matter here in
+     particular: this is the page a signed-out phone bookmarks, so this is the
+     head an iPhone reads when it goes looking for a Home Screen tile. All four
+     files come out of the build, and web.public_path lets an anonymous browser
+     have every one of them. -->
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Work Tracker">
 <style>
  @font-face{font-family:'Zodiak';
    src:url('/fonts/Zodiak-Variable.woff2') format('woff2'),
@@ -317,8 +328,16 @@ _LOGIN_PAGE = """<!doctype html>
    --rule:#26262c;--work:#ec4899;--on-work:#0a0a0c;--fault:#f87171;
    --fault-bg:#2a1618;--face:'Zodiak',ui-serif,Georgia,serif}
  *{box-sizing:border-box}
+ /* The safe area, as in web/ui/src/styles.css and for the same reason: this is
+    the page a signed-out phone bookmarks, so it is the one that has to survive
+    being opened as a Home Screen app. The insets are 0px anywhere that is not
+    such a phone, which is what makes this free everywhere else. */
  body{margin:0;min-height:100vh;display:flex;align-items:center;
-   justify-content:center;padding:2rem 1.5rem;
+   justify-content:center;
+   padding:calc(2rem + env(safe-area-inset-top,0px))
+           max(1.5rem,env(safe-area-inset-right,0px))
+           calc(2rem + env(safe-area-inset-bottom,0px))
+           max(1.5rem,env(safe-area-inset-left,0px));
    background-color:var(--paper);color:var(--ink);
    font:500 15px/1.55 var(--face);-webkit-font-smoothing:antialiased}
  /* The page's wash, exactly as the app wears it. */

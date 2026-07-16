@@ -2,18 +2,37 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- `viewport-fit=cover` lets the page own the whole screen, notch and home
+         indicator included -- which is what an iPhone hands a web app added to the
+         Home Screen, whether it asked for it or not (iOS 17 opens those standalone
+         by default). It is also what makes env(safe-area-inset-*) report anything
+         but zero, and styles.css spends those insets keeping text out from under
+         the status bar. Without this the wash stops short of the edges and the
+         insets read 0, so the padding that needs them silently does nothing. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
+    <!-- The paper, so the standalone app's status bar sits on the page's own
+         ground instead of a colour iOS picked. Matches ../portfolio. -->
+    <meta name="theme-color" content="#101014" />
     <title>Work Tracker</title>
-    <!-- The portfolio's mark, byte for byte from ../portfolio/index.html, because
-         these are one author's two sites and the tab is where you notice that
-         first. Inline, so it costs no request and cannot 404; Archivo is the
-         portfolio's face and resolves to whatever sans the browser has here,
-         which at 16px on a pink `d` is a difference nobody has ever seen. -->
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23101014'/%3E%3Ctext x='50' y='68' font-size='56' font-family='Archivo,sans-serif' font-weight='700' fill='%23EC4899' text-anchor='middle'%3Ed%3C/text%3E%3C/svg%3E"
-    />
+
+    <!-- The author's mark, shared with ../portfolio, in three cuts because one is
+         not enough. The portfolio carries this as a lone inline SVG, and an SVG
+         favicon is a thing Safari has never supported at any version -- so there
+         it quietly renders as nothing, and here it did too. The PNGs are what
+         Safari actually paints; the SVG is kept first for the browsers that do
+         support it, being the one cut that stays crisp at any size.
+
+         `apple-touch-icon` is separate and not optional: iOS reads *only* this for
+         a Home Screen tile -- never `rel=icon` -- and will not take a data: URI
+         for it. Its absence is why the tile came out blank. It is full-bleed and
+         square on purpose: iOS masks its own squircle, and pre-rounded corners
+         would be rounded twice. See public/icon.svg for the source. -->
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Work Tracker" />
     <!-- Zodiak carries every word on the page, so fetch it with the stylesheet
          rather than after it: without this the whole UI paints in fallback
          Georgia first and reflows once Zodiak lands. -->
