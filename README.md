@@ -940,7 +940,7 @@ work-tracker/
         serve-all.sh      launches the viewer on loopback + Tailscale in one command
         ui/               the React app (Vite); the only npm in the project
     widget/               the always-on-top mini player (Swift; optional)
-    tests/                195 unit tests
+    tests/                the Python suite; web/ui/src/lib holds the JS one
     README.md
 ```
 
@@ -996,10 +996,11 @@ discard the first session.
 ## Testing
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v
+python3 -m unittest discover -s tests -t tests -v   # the tracker, the API, the login
+cd web/ui && npm test                               # the geometry behind the strips
 ```
 
-195 tests, no dependencies, no network, no sleeping. They cover the duration
+309 tests, no dependencies, no network, no sleeping. They cover the duration
 arithmetic, every state transition and every illegal one, JSON round-trips,
 corrupt-file handling, the atomicity guarantees, the CLI's exit codes, the web
 API's payloads, every web command and every refusal, which origins may write (and
@@ -1007,7 +1008,24 @@ that widening the set never lets loopback slip or the network in), and the rules
 around the task label — including that an id naming an archive can never escape
 `sessions/`.
 
+The login is tested twice over, because it is the only part of this that a
+stranger can reach. Its decisions are pure functions and are asserted head-on —
+a forged token, an expired one, a viewer's cookie rewritten to say `owner`, the
+sixth wrong password. And the server that *applies* them is driven for real over
+a socket made of two `BytesIO` (`tests/test_server.py`): still no port bound,
+still no browser, but a genuine `POST /api/stop` with a genuine cookie, because
+that a rule exists and that the server consults it are two different claims.
+
 The suite passes on both `/usr/bin/python3` (3.9) and current Python (3.14).
+
+`npm test` is the strips' arithmetic, and it needs nothing installed either:
+`node --test` and `node:assert` ship with the Node this project already builds
+with. It is a small suite about one thing — **the midnight** — because that is
+the only part of this the eye cannot check. Every other bug in a strip is
+visible; a day boundary is arithmetic, it is wrong for a few hours a night, and
+by morning it has tidied itself away. That is precisely how the live session came
+to be drawn on the day it began, under a heading that said *Today*, for as long
+as there was nothing here to say otherwise.
 
 ---
 

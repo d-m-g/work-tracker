@@ -1,5 +1,4 @@
 import { formatDuration, formatTime } from '../lib/format.js'
-import { baseOf, minutesOf, segmentsOf, spanOf } from '../lib/timeline.js'
 import Controls, { StartForm } from './Controls.jsx'
 import Num from './Num.jsx'
 import Strip, { Ruler } from './Strip.jsx'
@@ -26,7 +25,18 @@ function Clock({ seconds, held }) {
   )
 }
 
-export default function LiveSession({ status, axis, busy, send, readOnly = false }) {
+/**
+ * Today: what the tracker has to show for the day you are in.
+ *
+ * `today` is the live session cut to this day (lib/timeline.js) — nearly always
+ * the whole of it, and after a midnight only this side. Every number on the card
+ * comes from there rather than from `status`, so the card counts the same hours
+ * its strip draws, and the same hours the history will show once the session is
+ * archived. `status` is still what the card is *about*: the state, the task, the
+ * buttons, and the moment it began, which is worth saying even when it was
+ * yesterday.
+ */
+export default function LiveSession({ status, today, axis, busy, send, readOnly = false }) {
   if (!status) {
     return (
       <section className="live">
@@ -62,13 +72,22 @@ export default function LiveSession({ status, axis, busy, send, readOnly = false
         </p>
       </header>
 
-      <Clock seconds={status.workedSeconds} held={held} />
+      <Clock seconds={today.workedSeconds} held={held} />
 
+      {/* The caption's first word is what the clock above it means, so it says
+          "today" exactly when that is not the same as "this session" — after a
+          midnight, when the digits hold this side of it and the session holds
+          both. The rest says where the session actually began, which on such a
+          night is the thing the clock cannot tell you: 0:00:00 worked and held
+          since 23:40 is a sentence about two days, and it should read like one. */}
       <p className="live__caption">
+        {today.startsEarlier ? 'worked today' : 'worked'} —{' '}
         {held ? (
-          <>worked — holding since {formatTime(status.pauseStart)}, so this is not moving</>
+          <>holding since {formatTime(status.pauseStart)}, so this is not moving</>
+        ) : today.startsEarlier ? (
+          <>running since {formatTime(status.start)}, the night before</>
         ) : (
-          <>worked — started {formatTime(status.start)}</>
+          <>started {formatTime(status.start)}</>
         )}
       </p>
 
@@ -84,30 +103,26 @@ export default function LiveSession({ status, axis, busy, send, readOnly = false
 
       <div className="live__timeline">
         <Ruler axis={axis} />
-        {/* The live session is drawn whole, on the day it began — one session you
-            are in the middle of, not two halves of two days. If it has run past
-            midnight the axis stretches for it (see lib/timeline.js), which is the
-            only time this page's ruler reads past 24:00. The history, being days
-            rather than sessions, is cut at midnight instead. */}
-        <Strip
-          segments={segmentsOf(status)}
-          axis={axis}
-          edge={minutesOf(spanOf(status).end, baseOf(status))}
-          held={held}
-        />
+        {/* Today's hours on today's ruler, the same one every row below is drawn
+            against — so the day you are in the middle of can be compared with the
+            days behind it, which is the entire reason the axis is shared. A
+            session that ran past midnight is cut at it here exactly as the history
+            cuts it (see lib/timeline.js), so this strip is already the one the
+            archive will draw when you press Stop. */}
+        <Strip segments={today.segments} axis={axis} edge={today.edge} held={held} />
       </div>
 
       <dl className="figures">
         <div>
           <dt>Paused</dt>
           <dd>
-            <Num>{formatDuration(status.pausedSeconds)}</Num>
+            <Num>{formatDuration(today.pausedSeconds)}</Num>
           </dd>
         </div>
         <div>
           <dt>Breaks</dt>
           <dd>
-            <Num>{status.pauseCount}</Num>
+            <Num>{today.pauseCount}</Num>
             {/* Prose, not a measurement, so it keeps its natural figures. */}
             {status.pauseInProgress && <span className="dim"> +1 open</span>}
           </dd>
@@ -115,7 +130,7 @@ export default function LiveSession({ status, axis, busy, send, readOnly = false
         <div>
           <dt>On the clock</dt>
           <dd>
-            <Num>{formatDuration(status.grossSeconds)}</Num>
+            <Num>{formatDuration(today.grossSeconds)}</Num>
           </dd>
         </div>
       </dl>

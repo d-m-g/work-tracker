@@ -3,8 +3,15 @@ import History from './components/History.jsx'
 import LiveSession from './components/LiveSession.jsx'
 import WidgetPortrait from './components/WidgetPortrait.jsx'
 import { isDemo, useDemoTracker } from './lib/demo.js'
-import { axisFor, daysOf } from './lib/timeline.js'
+import { axisFor, daysOf, spillOf, todayOf } from './lib/timeline.js'
 import { useTracker } from './lib/useTracker.js'
+
+/**
+ * The axis every strip is drawn against — a day, and the same one all the way
+ * down the page. It is a constant now (see lib/timeline.js), so it is built once
+ * here rather than recomputed whenever the clock ticks.
+ */
+const AXIS = axisFor()
 
 /**
  * Which of the two trackers this page load is holding.
@@ -50,20 +57,45 @@ function Viewer({ tracker, demo = false }) {
   // shows no buttons rather than buttons that might not be yours.
   const readOnly = status?.role !== 'owner'
 
+  // The session on the clock, or nothing. Named once: three things below need to
+  // know the difference between "running" and "idle", and none of them should be
+  // asking the question a second time.
+  const live = status && status.state !== 'idle' ? status : null
+
+  // What the live session amounts to today, which is what the card draws. Nearly
+  // always the session entire; only a session that has run past a midnight comes
+  // back cut, holding this side of it. See lib/timeline.js.
+  const today = useMemo(() => (live ? todayOf(live) : null), [live])
+
+  // The other side of that cut: hours worked before midnight are not today's, so
+  // they go where the rest of the past is, on the day they happened. It is null
+  // unless a midnight was actually crossed, and then the history is exactly the
+  // archive, as it always was.
+  const spill = useMemo(() => (live ? spillOf(live) : null), [live])
+
   // The history is days, not sessions: every session that touched a Tuesday is
   // drawn on Tuesday's one strip, and a session that ran past midnight is cut at
-  // it so each day counts only its own hours. See lib/timeline.js.
-  const days = useMemo(() => (sessions ? daysOf(sessions.sessions) : null), [sessions])
+  // it so each day counts only its own hours. The spill is merged in here rather
+  // than bolted on afterwards, so a night that holds both an archived session and
+  // the live one's small hours comes out as one day, like any other.
+  const days = useMemo(() => {
+    if (!sessions) return null
+    return daysOf(spill ? [...sessions.sessions, spill] : sessions.sessions)
+  }, [sessions, spill])
 
-  // One axis for every strip on the page, live and archived alike. Sharing it is
-  // what makes the days comparable: a late start *looks* late. It is a fixed day
-  // — nothing in `days` can push it, because they have all been cut to fit — so
-  // only the live session is offered to it, being the one thing that may still be
-  // running past a midnight.
-  const axis = useMemo(
-    () => axisFor(status && status.state !== 'idle' ? [status] : []),
-    [status],
-  )
+  // The archive's total, plus whatever the live session has already put behind a
+  // midnight — because that is now a row on the page, and a total that heads a
+  // list should count the list. The server's figure is kept as the base of it
+  // (it is what the CLI would print, and it is exact); what the live session
+  // contributes is the part of it that is no longer today.
+  const totals = useMemo(() => {
+    const archived = sessions?.totals ?? { count: 0, workedSeconds: 0, pausedSeconds: 0 }
+    if (!spill || !today) return archived
+    return {
+      ...archived,
+      workedSeconds: archived.workedSeconds + (live.workedSeconds - today.workedSeconds),
+    }
+  }, [sessions, spill, today, live])
 
   return (
     <main className="page">
@@ -109,7 +141,14 @@ function Viewer({ tracker, demo = false }) {
         </p>
       )}
 
-      <LiveSession status={status} axis={axis} busy={busy} send={send} readOnly={readOnly} />
+      <LiveSession
+        status={status}
+        today={today}
+        axis={AXIS}
+        busy={busy}
+        send={send}
+        readOnly={readOnly}
+      />
 
       {/* Only in the demo, and only here: on the real page the widget is three
           inches away on your own screen, and a picture of it would be a picture of
@@ -118,9 +157,9 @@ function Viewer({ tracker, demo = false }) {
 
       <History
         days={days}
-        totals={sessions?.totals ?? { count: 0, workedSeconds: 0, pausedSeconds: 0 }}
+        totals={totals}
         unreadable={sessions?.unreadable ?? []}
-        axis={axis}
+        axis={AXIS}
         send={send}
         readOnly={readOnly}
       />

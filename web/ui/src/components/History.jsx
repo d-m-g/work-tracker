@@ -84,10 +84,18 @@ function Day({ day, axis, index, send, readOnly }) {
                 </span>
                 {/* The task belongs to the whole session, not to the slice of it
                     that landed on this day — so editing it from either side of a
-                    midnight edits the one session, which is the truth. */}
+                    midnight edits the one session, which is the truth.
+
+                    Which door it goes through depends on whether that session has
+                    been archived yet. A row can be last night's half of the
+                    session still running (see spillOf): naming it by id would send
+                    the tracker looking through sessions/ for a session that is
+                    still in current.json, and be told no. It has no id worth
+                    naming — it is *the* live one, and `task` with no id is how you
+                    say so. */}
                 <TaskField
                   value={part.task}
-                  onCommit={(task) => send('task', { id: part.id, task })}
+                  onCommit={(task) => send('task', part.live ? { task } : { id: part.id, task })}
                   placeholder="What was this spent on?"
                   id={`task-${part.id}`}
                   readOnly={readOnly}

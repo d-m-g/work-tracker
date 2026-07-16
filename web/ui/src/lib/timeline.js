@@ -22,6 +22,16 @@
  * ending at 01:38 was minute 1594 of the day it began, the axis had to stretch to
  * 27 hours to hold it, and every day's ink was squeezed into the sliver that was
  * left. Now no day can exceed 24 hours, so the ruler is a day: 00:00 to 00:00.
+ *
+ * **The live session is cut at midnight too** (`todayOf`, `spillOf`). It used to
+ * be the one exception — drawn whole, on the day it began, with the axis stretched
+ * to hold it — and the exception was wrong twice over. A card headed *Today* was
+ * showing yesterday's ruler with nearly all of it empty and the work jammed
+ * against the right edge; and one live session past midnight stretched the axis
+ * every history row shares, so the comparison the ruler exists for was squashed
+ * for the whole page, worse the longer you worked. So it follows the same rule as
+ * everything else now: today's card holds today, the hours before midnight go to
+ * the day they were worked on, and pressing Stop changes nothing you can see.
  */
 
 const MINUTE = 60 * 1000
@@ -49,11 +59,6 @@ export function midnightOf(ms) {
 export function nextMidnightAfter(ms) {
   const moment = new Date(ms)
   return new Date(moment.getFullYear(), moment.getMonth(), moment.getDate() + 1).getTime()
-}
-
-/** Local midnight of the day a session began. */
-export function baseOf(session) {
-  return midnightOf(toMs(session.start))
 }
 
 /** Minutes from `base` to `moment`. */
@@ -115,12 +120,6 @@ function blocksOf(session) {
   return blocks
 }
 
-/** Cut a session into work and pause segments, in minutes of its own day. */
-export function segmentsOf(session) {
-  const base = baseOf(session)
-  return blocksOf(session).map((block) => segment(block.kind, block.from, block.to, base))
-}
-
 function segment(kind, from, to, base) {
   return {
     kind,
@@ -157,6 +156,98 @@ function byDay(from, to) {
 }
 
 const secondsOf = (ms) => Math.round(ms / 1000)
+
+/**
+ * Local midnight of the day a session is *in now* — the day its live edge falls
+ * in, which for a live session is the day it is for the person watching.
+ *
+ * Taken from the session's own end (`start + gross`, the server's arithmetic),
+ * never from `Date.now()`: the browser's clock can sit seconds from the server's,
+ * and a page that disagreed with itself about which day it is — the strip cut at
+ * one midnight, the digits counted to another — would be worse than either.
+ */
+function todayBaseOf(session) {
+  return midnightOf(spanOf(session).end)
+}
+
+/**
+ * What the live session amounts to **today**, in the shape the card draws.
+ *
+ * A session that began this morning is returned whole, which is nearly always
+ * what happens: `startsEarlier` is false and every number is the session's own.
+ * A session that began before the midnight it has since crossed is cut at it, and
+ * what comes back is only the hours on this side — today's ink, on today's ruler,
+ * starting from the left where it belongs.
+ *
+ * The hours on the other side are not lost, they are simply not *today*: they are
+ * yesterday's, and `spillOf` hands them to the history to be drawn on the day they
+ * were worked on. The two pieces still sum to the session.
+ *
+ * The clock restarting at midnight is the point rather than a side-effect. It is
+ * what the history has always said about a session like this, and what the archive
+ * will say the moment you press Stop — so this is the same tracker before and
+ * after, rather than one that rearranges the day under you when you finish it.
+ */
+export function todayOf(session) {
+  const { start, end } = spanOf(session)
+  const base = todayBaseOf(session)
+  const startsEarlier = start < base
+
+  // Only cut a session that actually crossed something. Left alone, the ordinary
+  // case cannot be bruised by the arithmetic here -- and the zero-width block a
+  // just-started session has (see blocksOf) survives, where a `to > base` filter
+  // would drop it for beginning exactly at midnight.
+  const blocks = startsEarlier
+    ? blocksOf(session)
+        .filter((block) => block.to > base)
+        .map((block) => ({ ...block, from: Math.max(block.from, base) }))
+    : blocksOf(session)
+
+  const total = (kind) =>
+    blocks
+      .filter((block) => block.kind === kind)
+      .reduce((sum, block) => sum + (block.to - block.from), 0)
+
+  const worked = total('work')
+  const paused = total('pause')
+
+  return {
+    base,
+    segments: blocks.map((block) => segment(block.kind, block.from, block.to, base)),
+    edge: minutesOf(end, base),
+    workedSeconds: secondsOf(worked),
+    pausedSeconds: secondsOf(paused),
+    grossSeconds: secondsOf(worked + paused),
+    // Breaks that *finished*, and that touched today -- the open one is counted
+    // separately by the card, which says "+1 open" rather than folding it in. A
+    // break taken across midnight belongs to both days, exactly as the history
+    // counts it (`breaks` in daysOf), because that is one break in each day's
+    // account of itself.
+    pauseCount: (session.pauses ?? []).filter((pause) => toMs(pause.end) > base).length,
+    startsEarlier,
+  }
+}
+
+/**
+ * The half of a live session that is no longer today: the hours before the
+ * midnight it has crossed, shaped as a session so the history can draw them.
+ *
+ * `null` when it has crossed nothing, which is the ordinary case and means the
+ * history is exactly the archive, as it was.
+ *
+ * It is `live` because the session it was cut from is still running, and the
+ * history needs to know two things that follow from that: the row *does* run on
+ * into the next day (it is cut at that midnight, not ended at it), and a task
+ * typed into it belongs to a session that is not in the archive yet — so it is
+ * written through the live session's own door rather than the archive's, which
+ * would answer "no such session" and be right to.
+ */
+export function spillOf(session) {
+  const { start, end } = spanOf(session)
+  const base = midnightOf(end)
+  if (start >= base) return null
+  return { ...session, end: new Date(base).toISOString(), live: true }
+}
 
 /**
  * Group archived sessions into the days they were worked on, newest first.
@@ -211,7 +302,14 @@ export function daysOf(sessions) {
             // something larger, and should say so rather than imply a day that
             // started at midnight sharp.
             startsEarlier: span.start < piece.day,
-            endsLater: span.end > nextMidnightAfter(piece.day),
+            // A live session's spill (see spillOf) was cut at today's midnight
+            // rather than ended at it, so its span stops exactly where the day
+            // does and the comparison alone would read "no". It does run on: it
+            // is running now.
+            endsLater: span.end > nextMidnightAfter(piece.day) || Boolean(session.live),
+            // Still running, so its task is written through the live session's
+            // door and not the archive's -- see History.
+            live: Boolean(session.live),
           }
           parts.set(piece.day, part)
           day.parts.push(part)
@@ -257,37 +355,27 @@ export function daysOf(sessions) {
 }
 
 /**
- * The shared axis every strip is drawn against: one day, 00:00 to 00:00.
+ * The axis every strip on the page is drawn against: one day, 00:00 to 00:00.
  *
- * A day is the same length as every other day, so the ruler is fixed and the
- * comparison it exists for is exact — four hours of work looks like four hours of
- * a day, on Monday and on Friday alike. Nothing in the history can push it, since
- * `daysOf` has already cut the days to size.
+ * A constant, and that is the whole of its job. A day is the same length as every
+ * other day, so the ruler is fixed and the comparison it exists for is exact —
+ * four hours of work looks like four hours of a day, on Monday and on Friday
+ * alike. Nothing can push it now: `daysOf` has cut the archive to size and
+ * `todayOf` cuts the live session, so there is no strip on this page longer than
+ * the day it is drawn on.
  *
- * The one thing that can is a live session still running past midnight: it is
- * drawn whole, on the day it began, because it is one session and you are in the
- * middle of it. So the axis stretches to hold it rather than let it run off the
- * end — and it is the only reason the ruler ever reads past 24:00, for as long as
- * it takes you to press Stop.
+ * It used to take the live session and stretch for it, which was the one way the
+ * ruler could read past 24:00. That is gone, and with it the day that got shorter
+ * on screen the longer you worked past a midnight — one running session was
+ * enough to squash every row beneath it.
  */
-export function axisFor(live = []) {
-  let end = DAY_MINUTES
-
-  for (const session of live) {
-    const past = minutesOf(spanOf(session).end, baseOf(session))
-    if (past > end) end = Math.ceil(past / 60) * 60
-  }
-
-  // Thin the ticks as the span grows, so the labels never collide.
-  const hours = Math.round(end / 60)
-  const step = hours <= 10 ? 1 : hours <= 16 ? 2 : 3
-
+export function axisFor() {
+  const hours = DAY_MINUTES / 60
   const ticks = []
-  for (let hour = 0; hour <= hours; hour += step) {
+  for (let hour = 0; hour <= hours; hour += 3) {
     ticks.push(hour * 60)
   }
-
-  return { start: 0, end, ticks }
+  return { start: 0, end: DAY_MINUTES, ticks }
 }
 
 /** Where a minute-of-day sits on the axis, as a percentage from the left. */
