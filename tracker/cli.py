@@ -479,6 +479,21 @@ def _run_remote(
         note_offline(root)
         return fall_back_to_local()
 
+    # A clean exit with an empty hand is not an answer. ssh reports a multiplexed
+    # connection whose master died mid-command exactly so, and `status` always has
+    # something to say -- so silence here is the VM failing to answer, whatever it
+    # exited with. Relaying it would print nothing and call it success, and the
+    # widget, handed no document to read, can only call that a fault: it would
+    # blank the clock and grey the very buttons you were reaching for. Serve the
+    # local mirror instead, which is what an unreachable VM already does.
+    #
+    # Reads only. A write may well have landed on the VM before its reply was
+    # lost, and running it again here could pause a session twice or archive one
+    # the VM has already archived. The `refresh_local` below pulls the truth back
+    # down; the next poll shows it.
+    if not is_write and not remote_out.strip():
+        return fall_back_to_local()
+
     # Online: relay exactly what the VM said, then keep local a warm mirror.
     clear_offline(root)
     if remote_out:
