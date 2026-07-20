@@ -19,25 +19,21 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Final, TextIO
+from typing import Final, Optional, TextIO
 
 from .models import ActiveSession, Pause, SessionState
 from .remote import (
-    SSH_UNREACHABLE,
-    clear_offline,
-    clear_pending,
-    is_pending,
+    Remote,
+    background_sync,
     mark_pending,
-    note_offline,
-    offline_recent,
-    refresh_local,
     remote_from_env,
-    synchronise,
 )
 from .storage import Storage
 from .tracker import Status, ToggleAction, ToggleResult, WorkTracker
@@ -343,6 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
         "stop": "end the session and archive it under sessions/",
         "status": "show the current state, worked time, paused time and pause count",
         "task": "show, set or clear what a session is being spent on",
+        "sync": "(internal) reconcile the local files with the VM in the background",
     }
     for name, help_text in descriptions.items():
         subparser = subparsers.add_parser(name, help=help_text, description=help_text)
@@ -385,12 +382,19 @@ def main(
 
     root: Path = args.root if args.root is not None else default_root()
 
-    # With a remote configured the command runs on the VM; without one, or when
-    # the VM cannot be reached, it runs here exactly as it always has.
+    # ``sync`` is the background half of local-first: it never runs a user's
+    # command, it only reconciles the local files with the VM, so it is dispatched
+    # here rather than through the local/remote split (and never kicks itself).
     remote = remote_from_env()
-    if remote is not None:
-        return _run_remote(remote, root, raw_argv, args, out, err)
-    return _run_local(root, args, out, err)
+    if args.command == "sync":
+        return _cmd_sync(remote, root, err)
+
+    # With a VM configured every command still runs against the *local* files --
+    # instantly, offline or not -- and a detached sync folds them up afterwards.
+    # With no VM it is the purely-local tracker it has always been.
+    if remote is None:
+        return _run_local(root, args, out, err)
+    return _run_remote(root, args, out, err)
 
 
 def _run_local(
@@ -410,96 +414,80 @@ def _run_local(
         return EXIT_ERROR
 
 
-def _strip_root(raw_argv: Sequence[str]) -> list[str]:
-    """Drop any ``--root`` from the arguments forwarded to the VM.
+#: The launcher this package sits beside, spawned for the detached background sync.
+#: Resolved from this file's location, not the data root, because the *script* is
+#: always here even when ``--root`` points the *data* somewhere else.
+_SYNC_SCRIPT: Final[Path] = Path(__file__).resolve().parent.parent / "tracker.py"
 
-    ``--root`` names a directory on *this* machine; the VM has its own data
-    directory and must not be pointed at a path that means nothing there. Every
-    other argument -- ``--json``, the command, a task with spaces in it -- is
-    forwarded untouched.
+
+def _run_remote(root: Path, args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
+    """Act locally now; sync to the VM in the background.
+
+    This is the whole of local-first. The command runs against the local files
+    exactly as it does with no VM configured -- so it is instant, and works with the
+    network gone -- and only two cheap, non-blocking things are added: a write drops
+    a ``.sync_pending`` marker, and every command kicks a detached ``sync`` that
+    folds the local files together with the VM out of process. Nothing here touches
+    the network, so a dead connection can never make the caller wait.
     """
-    forwarded: list[str] = []
-    skip = False
-    for token in raw_argv:
-        if skip:
-            skip = False
-            continue
-        if token == "--root":
-            skip = True  # also drop its value, the next token
-            continue
-        if token.startswith("--root="):
-            continue
-        forwarded.append(token)
-    return forwarded
+    result = _run_local(root, args, out, err)
+    if args.command != "status":  # a write: there is local work to push up
+        mark_pending(root)
+    _kick_sync(root)
+    return result
 
 
-def _run_remote(
-    remote: object,
-    root: Path,
-    raw_argv: Sequence[str],
-    args: argparse.Namespace,
-    out: TextIO,
-    err: TextIO,
-) -> int:
-    """Run one command on the VM, falling back to local if it cannot be reached.
+def _kick_sync(root: Path) -> None:
+    """Fire off a detached, best-effort background sync and return at once.
 
-    ``status`` is a read and needs no reconciliation; every other command is a
-    write. On reconnection -- the first command after an offline stretch -- the
-    owed merge runs once before the command, and after a successful online write
-    the local files are refreshed so a later drop to offline resumes from the
-    right place.
+    stdout, stderr and stdin go to ``/dev/null`` and the child starts its own
+    session, for two reasons that both matter: it must not hold the parent's stdout
+    pipe open -- the widget reads that pipe to the end, and would block until the
+    sync finished -- and it must outlive the parent, so a one-shot Shortcut or a
+    finished status poll does not take the sync down with it.
     """
-    is_write = args.command != "status"
+    try:
+        subprocess.Popen(
+            [sys.executable, str(_SYNC_SCRIPT), "--root", str(root), "sync"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError:
+        pass  # best-effort: a failed kick just means the next command tries again
 
-    def fall_back_to_local() -> int:
-        """Run here and, for a write, remember to reconcile on reconnection."""
-        result = _run_local(root, args, out, err)
-        if is_write:
-            mark_pending(root)
-        return result
 
-    # Just failed to reach the VM? Don't pay the connect timeout again yet --
-    # answer from local at once. The cooldown re-probes on its own before long.
-    if offline_recent(root):
-        return fall_back_to_local()
+def _cmd_sync(remote: Optional[Remote], root: Path, err: TextIO) -> int:
+    """Reconcile the local files with the VM, best-effort. Always exits 0.
 
-    # Reconnecting: fold in anything done offline before trusting the VM again.
-    # A failed sync means we are still offline, so note it and serve local.
-    if is_pending(root):
-        if synchronise(remote, root, err):  # type: ignore[arg-type]
-            clear_pending(root)
-            clear_offline(root)
-        else:
-            note_offline(root)
-            return fall_back_to_local()
+    The background half of local-first, run detached by :func:`_kick_sync` after
+    every command and by the widget's poll. With no VM configured there is nothing
+    to do. A non-blocking lock keeps the once-a-second kicks from piling onto one
+    another: if a sync already holds it, this one steps aside and lets that one
+    finish the work. Every failure is swallowed -- a button must never be handed a
+    sync error it did not cause.
+    """
+    if remote is None:
+        return EXIT_OK
 
-    exit_code, remote_out, remote_err = remote.run(_strip_root(raw_argv))  # type: ignore[attr-defined]
-
-    if exit_code == SSH_UNREACHABLE:
-        note_offline(root)
-        return fall_back_to_local()
-
-    # A clean exit with an empty hand is not an answer. ssh reports a multiplexed
-    # connection whose master died mid-command exactly so, and `status` always has
-    # something to say -- so silence here is the VM failing to answer, whatever it
-    # exited with. Relaying it would print nothing and call it success, and the
-    # widget, handed no document to read, can only call that a fault: it would
-    # blank the clock and grey the very buttons you were reaching for. Serve the
-    # local mirror instead, which is what an unreachable VM already does.
-    #
-    # Reads only. A write may well have landed on the VM before its reply was
-    # lost, and running it again here could pause a session twice or archive one
-    # the VM has already archived. The `refresh_local` below pulls the truth back
-    # down; the next poll shows it.
-    if not is_write and not remote_out.strip():
-        return fall_back_to_local()
-
-    # Online: relay exactly what the VM said, then keep local a warm mirror.
-    clear_offline(root)
-    if remote_out:
-        out.write(remote_out)
-    if remote_err:
-        err.write(remote_err)
-    if is_write and exit_code == EXIT_OK:
-        refresh_local(remote, root)  # type: ignore[arg-type]
-    return exit_code
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        lock_fd = os.open(root / ".sync_lock", os.O_CREAT | os.O_WRONLY, 0o644)
+    except OSError:
+        return EXIT_OK
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return EXIT_OK  # another sync is already running; let it do the work
+        try:
+            background_sync(remote, root, err)
+        except Exception:  # a best-effort daemon must not die on an odd failure
+            pass
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+    return EXIT_OK

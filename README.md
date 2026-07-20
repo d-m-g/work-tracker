@@ -740,7 +740,7 @@ second implementation to drift, because there isn't a second implementation.
 # drive the VM from this shell
 export WORK_TRACKER_SSH=ubuntu@203.0.113.10
 export WORK_TRACKER_SSH_KEY=~/keys/tracker
-python3 tracker.py toggle       # runs on the VM; falls back to local if it can't
+python3 tracker.py toggle       # acts locally at once, then syncs to the VM
 ```
 
 **The widget** reads the same settings from `defaults`, the way it already learns
@@ -759,32 +759,45 @@ re-import:
 python3 shortcuts/build_shortcuts.py --ssh ubuntu@203.0.113.10 --ssh-key ~/keys/tracker
 ```
 
-### Offline fallback, and folding it back in
+### Local-first, and folding it back in
 
-Lose the network and nothing stops: the command runs against your local files
-instead, exactly as it did before any of this existed, and a `.sync_pending`
-marker is dropped. The next time the VM is reachable, the two are reconciled
-**once**, before the command runs:
+Every command runs against your **local files first** and returns at once -- the
+same whether the VM is a millisecond away or the network is gone -- and a detached,
+background `sync` folds those files together with the VM afterwards, out of the way
+of the button you just pressed. So a `start` is instant offline, and there is no
+connection for a dropped wifi to hang on.
+
+The VM stays the **source of truth**. When you have made no local change, the sync
+simply mirrors it down, so a pause, resume, stop or start done from the **web**
+appears on the widget within a poll or two. When you *have* changed things offline,
+the two are reconciled the next time the VM is reachable:
 
 * **Archived sessions union in both directions** and are never overwritten --
-  anything you recorded offline is pushed up, anything the VM gained (driven from
-  your phone, say) is pulled down.
-* **The live session** is settled by whichever side has the more recent activity.
-  In the rare case where both sides held a *different* live session at once, the
-  loser is **stashed under `conflicts/`, never deleted**, and said out loud.
+  anything you recorded offline is pushed up, anything the VM gained (from the web,
+  say) is pulled down.
+* **The same live session, edited on both sides, is merged** -- the closed pauses
+  are unioned, so a pause you recorded offline and one the web recorded both
+  survive, and only "what is it doing right now" is taken from whichever changed
+  last.
+* **Two genuinely different live sessions** cannot share one `current.json`, so the
+  more recent stays and the loser is **stashed under `conflicts/`, never deleted**.
+* A **stop** on either side is read from the archives, so a stopped session is
+  cleared on the other side rather than resurrected.
 
 ### Kept cheap on purpose
 
-The widget polls once a second; driving that remotely would be a poor trade if
-each poll paid for a fresh connection or a file sync. It does neither:
+The widget polls once a second, and every command and poll kicks a sync; neither
+pays for it in the common case:
 
-* a **persistent, multiplexed SSH connection** is reused across polls, so a poll
-  is one round trip, not a handshake;
-* **status polls sync nothing** -- reconciliation happens only on reconnection,
-  and the small `current.json` is refreshed only after a *write*, a few times a
-  day rather than once a second;
-* while offline, a short **cooldown** answers from local immediately instead of
-  each poll waiting out the connection timeout, re-probing every few seconds.
+* the sync is **detached and lock-guarded** -- it never blocks the command, and if
+  one is already running the next kick steps aside rather than piling on;
+* a **persistent, multiplexed SSH connection** is reused across syncs, so a sync
+  that does reach the VM is one round trip, not a handshake;
+* with nothing owed and the mirror **fresh** (synced in the last few seconds), an
+  idle kick skips the network entirely; and after a failure a short **cooldown**
+  keeps the next kicks from each waiting out the connection timeout;
+* every ssh and rsync call is **hard-bounded**, so a connection that drops
+  mid-flight turns into "offline, try later" in seconds, never a hang.
 
 ---
 

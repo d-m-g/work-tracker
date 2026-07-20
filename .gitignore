@@ -26,11 +26,14 @@ __pycache__/
 /.secrets/
 
 # Remote-driving state, when the CLI drives a VM over SSH. Markers for "a
-# reconcile is owed" and "the VM was just unreachable", and the conflicts/ folder
-# where a genuinely two-sided live-session clash is stashed. All local runtime
-# state, none of it source.
+# reconcile is owed", "the VM was just unreachable" and "last synced at", the lock
+# that keeps two background syncs from overlapping, and the conflicts/ folder where
+# a genuinely two-sided live-session clash is stashed. All local runtime state,
+# none of it source.
 /.sync_pending
 /.offline_since
+/.last_sync
+/.sync_lock
 /conflicts/
 
 # Login secrets, when the viewer runs with a password. The signing secret and

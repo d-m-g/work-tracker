@@ -8,28 +8,33 @@ writes to one place, the one the web viewer reads.
 
 The design keeps the tracker's founding promise (one writer, no second
 implementation of the rules) intact by not writing a second implementation at
-all. When a remote is configured, the CLI runs *the very same* ``tracker.py`` on
-the VM over SSH and prints back what it said. ``--json status`` there is the
-``--json status`` here; ``stop`` prints the same sentences. There is nothing to
-drift, because there is nothing new to be right or wrong.
+all. Every command runs against the *local* files through the very same
+``tracker.py`` it always did, and a separate, detached ``sync`` folds those files
+together with the VM's afterwards. There is nothing new to be right or wrong,
+because the rules still live in one place and the sync only moves whole files.
 
-Three behaviours, in order of how often they happen:
+The model is **local-first, VM-as-truth**:
 
-* **Online (the common path).** The command runs on the VM over a *persistent,
-  multiplexed* SSH connection, so the widget's once-a-second status poll reuses
-  one connection rather than paying for a handshake each time. This is the whole
-  reason the poll can be remote without hammering either end.
+* **Act locally, at once.** A command writes the local files and returns
+  immediately -- no network in its path -- so it is instant whether the VM is a
+  millisecond away or gone entirely, and drops a ``.sync_pending`` marker to say
+  there is local work to push. This is what makes the widget and the Shortcuts
+  respond the same offline as on.
 
-* **Offline (the fallback).** If the VM cannot be reached, the command runs
-  locally exactly as it always did, and a ``.sync_pending`` marker is dropped so
-  the next reconnection knows there is local work to fold back in.
+* **Sync in the background.** A detached, lock-guarded ``sync`` (kicked after each
+  command and by the widget's poll) reconciles with the VM when it can reach it,
+  and does nothing when it cannot -- to be retried by the next kick. Every network
+  call is hard-bounded, so a dropped wifi can never leave it hanging.
 
-* **Reconnect (the reconciliation).** Before the next *online* command, if the
-  marker is set, local and remote are merged -- once -- and the marker cleared.
-  Archived sessions union in both directions and are never overwritten; the live
-  session is decided by whichever side has the more recent activity, and a
-  genuine two-sided conflict is stashed, never deleted. The heavy work happens
-  here, at reconnection, and nowhere near the per-second poll.
+* **The VM stays the source of truth.** When there is nothing pending, the sync
+  simply mirrors the VM down, so a pause or a stop done from the *web* appears
+  locally. When something *is* pending -- the Mac changed things offline -- local
+  and remote are reconciled: archived sessions union both ways and are never
+  overwritten; two copies of the *same* live session are **merged** (their closed
+  pauses unioned, the live head taken from whichever changed last); two genuinely
+  *different* live sessions cannot share one ``current.json``, so the loser is
+  stashed under ``conflicts/``, never deleted. A ``stop`` on either side is read
+  from the archives, so a stopped session is cleared, not resurrected.
 
 Configuration is three environment variables, so the widget and the Shortcuts
 can turn it on by setting them and nothing else:
@@ -49,10 +54,12 @@ import os
 import shlex
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Callable, Dict, List, Optional, TextIO, Tuple
 
-from .utils import atomic_write_json, now, parse_timestamp, read_json
+from .models import ActiveSession
+from .utils import CorruptJSONError, atomic_write_json, now, parse_timestamp, read_json
 
 #: Absolute paths to the tools we shell out to. Resolved once, with a fallback to
 #: the standard macOS location, because a GUI app (the widget) spawns us with a
@@ -62,19 +69,24 @@ _SSH_BIN = shutil.which("ssh") or "/usr/bin/ssh"
 _RSYNC_BIN = shutil.which("rsync") or "/usr/bin/rsync"
 
 __all__ = [
+    "CurrentPlan",
     "Remote",
     "SYNC_PENDING",
+    "background_sync",
     "clear_offline",
     "clear_pending",
+    "flush_local",
     "is_pending",
     "latest_activity",
     "mark_pending",
+    "merge_current",
     "note_offline",
+    "note_synced",
     "offline_recent",
-    "reconcile_current",
     "refresh_local",
     "remote_from_env",
-    "synchronise",
+    "resolve_current",
+    "synced_recently",
 ]
 
 #: Marker file, in the data directory, meaning "commands ran locally while the VM
@@ -93,9 +105,10 @@ OFFLINE_SINCE = ".offline_since"
 #: short enough that coming back online is noticed within a handful of seconds.
 _OFFLINE_COOLDOWN = 15.0
 
-#: ssh's own exit code for "could not even connect". The remote CLI's exits (0, 1,
-#: 2) all mean the command *reached* the VM and answered; only 255 means the
-#: transport failed, and only that should trigger the offline fallback.
+#: ssh's own exit code for "could not even connect". Every small command we run on
+#: the VM (``true``, ``cat current.json``, ``rm -f current.json``) returns 0 when it
+#: reached the VM and answered; only 255 -- or our own timeout, mapped to it -- means
+#: the transport failed, which is what tells the syncer the VM is offline.
 SSH_UNREACHABLE = 255
 
 #: How long a connection attempt may hang before we call it offline. Short, so a
@@ -106,6 +119,23 @@ _CONNECT_TIMEOUT = 3
 #: enough that a burst of once-a-second polls shares one connection; short enough
 #: that it does not sit open forever.
 _CONTROL_PERSIST = "60s"
+
+#: A hard ceiling on *any* ssh or rsync call, whatever ssh's own timeouts do. It
+#: is the backstop for the one case ``ConnectTimeout`` does not cover: a command
+#: multiplexed over a master whose network vanished *after* it connected, which
+#: attaches to the live socket instantly and then blocks on a dead TCP session for
+#: as long as the kernel will retransmit -- minutes. This turns that into seconds.
+_EXEC_TIMEOUT = 6
+
+#: Marker file recording *when* the local files were last folded together with the
+#: VM. It lets a burst of sync kicks -- one per command, one per widget poll -- do
+#: real work only every so often instead of on every tick, when nothing is owed.
+SYNCED_AT = ".last_sync"
+
+#: How long a mirror stays "fresh enough" that an idle sync kick can skip the VM.
+#: Short, so a web-side change surfaces within a poll or two; long enough that the
+#: once-a-second kicks do not each reach across the network for nothing.
+_SYNC_FRESH = 5.0
 
 
 class Remote:
@@ -141,6 +171,11 @@ class Remote:
             "-o", "ControlMaster=auto",
             "-o", f"ControlPath={self._control_path()}",
             "-o", f"ControlPersist={_CONTROL_PERSIST}",
+            # Keepalives so a session multiplexed over a master whose network died
+            # gives up on its own in a few seconds, rather than waiting out the
+            # kernel's TCP retransmits. The subprocess timeout is the hard backstop.
+            "-o", "ServerAliveInterval=2",
+            "-o", "ServerAliveCountMax=2",
         ]
         if self.key:
             command += ["-i", self.key]
@@ -156,28 +191,16 @@ class Remote:
                 self._ssh_command() + [command],
                 capture_output=True,
                 text=True,
+                timeout=_EXEC_TIMEOUT,
             )
+        except subprocess.TimeoutExpired:
+            # The connection hung past the ceiling (a dead multiplexed master, say):
+            # indistinguishable, for our purposes, from a VM that cannot be reached.
+            return SSH_UNREACHABLE, "", "timed out"
         except OSError as exc:
             # ssh itself missing or unrunnable: treat as unreachable, fall back.
             return SSH_UNREACHABLE, "", str(exc)
         return result.returncode, result.stdout, result.stderr
-
-    def run(self, argv: List[str]) -> Tuple[int, str, str]:
-        """Run ``tracker.py argv`` on the VM. Returns (exit, stdout, stderr).
-
-        The exit code is the remote CLI's own -- so a wrong-state refusal on the
-        VM comes back as its exit 1 and its message, indistinguishable from
-        running it here -- *except* for :data:`SSH_UNREACHABLE`, which means the
-        VM was never reached and the caller should fall back to local.
-        """
-        # `cd` into the repo so tracker.py's own path resolution works, then exec
-        # the interpreter macOS-and-Ubuntu both ship. shlex.quote keeps a task
-        # with a space or a quote in it an argument, never shell.
-        inner = "cd {} && exec /usr/bin/python3 tracker.py {}".format(
-            shlex.quote(self.path),
-            " ".join(shlex.quote(a) for a in argv),
-        )
-        return self._exec(inner)
 
     def reachable(self) -> bool:
         """A cheap liveness probe that also warms the multiplexed connection."""
@@ -218,9 +241,14 @@ class Remote:
         command += extra or []
         command += [source, destination]
         try:
-            return subprocess.run(command, capture_output=True, text=True).returncode == 0
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=_EXEC_TIMEOUT
+            )
+        except subprocess.TimeoutExpired:
+            return False
         except OSError:
             return False
+        return result.returncode == 0
 
     def archives_up(self, root: Path) -> bool:
         """Push local archives the VM lacks -- never overwriting one it has."""
@@ -256,6 +284,17 @@ class Remote:
             _remove(root / "current.json")
             return True
         return self._rsync(self._remote_spec("current.json"), str(root / "current.json"))
+
+    def clear_current(self) -> bool:
+        """Delete the VM's live session, so it reads idle.
+
+        The mirror of an *absence*: rsync can copy a file, but it cannot push the
+        fact that one is gone, so a session stopped on this machine has to be
+        cleared on the VM by hand. Returns True unless the VM was unreachable.
+        """
+        remote_file = shlex.quote(self.path + "/current.json")
+        exit_code, _, _ = self._exec(f"rm -f {remote_file}")
+        return exit_code != SSH_UNREACHABLE
 
 
 # ---------------------------------------------------------------------------
@@ -305,46 +344,125 @@ def latest_activity(current: Optional[Dict[str, object]]):
     return latest
 
 
-def reconcile_current(
+def merge_current(
+    local: Dict[str, object],
+    remote: Dict[str, object],
+) -> Optional[Dict[str, object]]:
+    """Fold two copies of the *same* live session into one, or ``None`` if they
+    cannot be folded.
+
+    Two copies are mergeable exactly when they are the same session -- same ``id``,
+    and therefore the same ``start``. When they are, nothing recorded is thrown
+    away: the closed pauses are the additive part of a session's history, so they
+    are **unioned** (deduped by their exact ``start``/``end``), and only the live
+    *head* -- the running/paused state, the open ``pauseStart`` and the ``task`` --
+    is taken wholesale, from whichever side has the more recent activity. So a
+    pause this machine recorded offline and a pause the web recorded meanwhile both
+    survive; only the single fact of "what is the session doing *now*" is decided,
+    and recency is the fair way to decide it.
+
+    Returns ``None`` -- "not mergeable, decide it some other way" -- when the ids
+    differ or when either document will not parse, so a genuine two-session clash
+    or a corrupt file is left for the caller to stash rather than silently blended.
+    """
+    if local.get("id") != remote.get("id"):
+        return None
+    try:
+        a = ActiveSession.from_dict(local)
+        b = ActiveSession.from_dict(remote)
+    except CorruptJSONError:
+        return None
+
+    unioned: Dict[Tuple[object, object], object] = {}
+    for pause in list(a.pauses) + list(b.pauses):
+        unioned[(pause.start, pause.end)] = pause
+    merged_pauses = sorted(unioned.values(), key=lambda pause: pause.start)
+
+    # The head -- current state, open pause and label -- comes from the side that
+    # changed last; ``>=`` keeps local on an exact tie, sparing a needless push.
+    a_activity = latest_activity(local)
+    b_activity = latest_activity(remote)
+    head = a if (b_activity is None or (a_activity is not None and a_activity >= b_activity)) else b
+
+    merged = ActiveSession(
+        id=a.id,
+        start=a.start,
+        state=head.state,
+        pause_start=head.pause_start,
+        pauses=merged_pauses,
+        task=head.task,
+    )
+    return merged.to_dict()
+
+
+@dataclass
+class CurrentPlan:
+    """What a sync should do with the two live sessions it found.
+
+    ``action`` is the move for ``current.json``: ``"none"`` (leave it), ``"push"``
+    (local is the truth -- send it up), ``"pull"`` (the VM is the truth -- bring it
+    down), or ``"merge"`` (write ``merged`` on both sides). ``clear_local`` and
+    ``clear_remote`` delete a ``current.json`` that a ``stop`` left behind, and
+    ``stash`` names a live session that must be preserved under ``conflicts/``
+    before it is overwritten -- the one thing a reconciliation must never drop.
+    """
+
+    action: str
+    merged: Optional[Dict[str, object]] = None
+    stash: Optional[Dict[str, object]] = None
+    clear_local: bool = False
+    clear_remote: bool = False
+
+
+def resolve_current(
     local: Optional[Dict[str, object]],
     remote: Optional[Dict[str, object]],
-) -> Tuple[str, bool]:
-    """Decide whose live session survives a reconnection.
+    is_archived: Callable[[object], bool],
+) -> CurrentPlan:
+    """Decide what becomes of the live session when local and VM meet again.
 
-    Returns ``(winner, conflict)`` where ``winner`` is ``"local"``, ``"remote"``
-    or ``"none"`` (both idle), and ``conflict`` is True only when both sides hold
-    a *different* live session and one had to be set aside.
+    ``is_archived(id)`` reports whether that session already has an archive -- the
+    tell that it was *stopped* somewhere, on this machine or from the web. It is
+    consulted first, because a live file left behind by a stop is not a live
+    session at all: whichever side still shows it is cleared, and the reconciler
+    goes on as if that side were idle.
 
-    The rules, in plain terms:
+    What remains, in plain terms:
 
-    * If only one side has a live session, it wins -- offline work flows up, and a
-      session started on the phone flows down.
-    * If both hold the *same* session (same id), local wins: while the VM was
-      unreachable, this machine is the only one that could have changed it (a
-      pause, a task edit), so its copy is the newer truth.
-    * If both hold *different* sessions, the one with the more recent activity
-      wins and the other is stashed rather than dropped -- never silently discard
-      a session that has real time in it. This is the only ``conflict``.
+    * Only one side still live -- it wins. Offline work flows up; a session the web
+      started (or the mirror has not yet caught) flows down.
+    * Both live and the *same* session -- :func:`merge_current` folds them together
+      so nothing recorded on either side is lost.
+    * Both live and *different* sessions (or a same-session merge that could not be
+      built) -- the more recent wins and the loser is stashed, never dropped.
     """
-    if not local and not remote:
-        return "none", False
-    if local and not remote:
-        return "local", False
-    if remote and not local:
-        return "remote", False
+    clear_local = local is not None and is_archived(local.get("id"))
+    clear_remote = remote is not None and is_archived(remote.get("id"))
+    live_local = None if clear_local else local
+    live_remote = None if clear_remote else remote
 
-    assert local is not None and remote is not None
-    if local.get("id") == remote.get("id"):
-        return "local", False
+    if not live_local and not live_remote:
+        return CurrentPlan("none", clear_local=clear_local, clear_remote=clear_remote)
+    if live_local and not live_remote:
+        return CurrentPlan("push", clear_local=clear_local, clear_remote=clear_remote)
+    if live_remote and not live_local:
+        return CurrentPlan("pull", clear_local=clear_local, clear_remote=clear_remote)
 
-    local_activity = latest_activity(local)
-    remote_activity = latest_activity(remote)
-    if remote_activity is None:
-        return "local", True
-    if local_activity is None:
-        return "remote", True
-    winner = "local" if local_activity >= remote_activity else "remote"
-    return winner, True
+    assert live_local is not None and live_remote is not None
+    merged = merge_current(live_local, live_remote)
+    if merged is not None:
+        return CurrentPlan("merge", merged=merged)
+
+    # Two genuinely different live sessions: the more recent stays, the other is
+    # set aside so no session with real time in it is ever silently discarded.
+    local_activity = latest_activity(live_local)
+    remote_activity = latest_activity(live_remote)
+    local_wins = remote_activity is None or (
+        local_activity is not None and local_activity >= remote_activity
+    )
+    if local_wins:
+        return CurrentPlan("push", stash=live_remote)
+    return CurrentPlan("pull", stash=live_local)
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +512,27 @@ def offline_recent(root: Path, cooldown: float = _OFFLINE_COOLDOWN) -> bool:
     return (now().timestamp() - since) < cooldown
 
 
+def note_synced(root: Path) -> None:
+    """Record that the local files were just folded together with the VM."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / SYNCED_AT).write_text(str(now().timestamp()), encoding="utf-8")
+
+
+def synced_recently(root: Path, window: float = _SYNC_FRESH) -> bool:
+    """True if a sync completed within the last ``window`` seconds.
+
+    While it holds, an *idle* sync kick -- one with nothing pending to push -- skips
+    the VM entirely, so the once-a-second kicks do not each reach across the network
+    for nothing. A garbled or absent marker means "not fresh", which fails safe
+    toward doing the sync.
+    """
+    try:
+        since = float((root / SYNCED_AT).read_text(encoding="utf-8").strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return False
+    return (now().timestamp() - since) < window
+
+
 def _remove(path: Path) -> None:
     """Delete ``path`` if it exists; a missing file is already the goal."""
     try:
@@ -436,48 +575,105 @@ def _stash(root: Path, session: Dict[str, object], err: TextIO) -> None:
     print(f"note: a conflicting live session was set aside at {target}", file=err)
 
 
-def synchronise(remote: "Remote", root: Path, err: TextIO) -> bool:
-    """Fold local and remote back together after a reconnection. Idempotent.
+def _is_archived_locally(root: Path) -> Callable[[object], bool]:
+    """A predicate: does this id already have an archive under ``sessions/``?
 
-    Returns True if the VM was reachable and the merge ran, False if it was still
-    offline and nothing changed. Archived sessions union in both directions and
-    are never overwritten; the live session is settled by
-    :func:`reconcile_current`, and the losing side of a genuine conflict is
-    stashed by :func:`_stash`, never dropped.
+    Built after archives have been unioned both ways, so an archive written by a
+    ``stop`` on *either* side is visible here -- which is what lets a stopped-then-
+    lingering ``current.json`` be told apart from a session that is genuinely live.
+    """
+
+    def archived(session_id: object) -> bool:
+        return isinstance(session_id, str) and (root / "sessions" / f"{session_id}.json").exists()
+
+    return archived
+
+
+def flush_local(remote: "Remote", root: Path, err: TextIO) -> bool:
+    """Fold this machine's offline work back together with the VM. Idempotent.
+
+    Returns True if the VM was reachable and the reconcile ran, False if it was
+    still offline. Archived sessions union in both directions and are never
+    overwritten; the live session is settled by :func:`resolve_current` -- a stop
+    on either side is cleared, the same session edited on both is merged, and the
+    loser of a genuine two-session clash is stashed by :func:`_stash`, never
+    dropped.
     """
     if not remote.reachable():
         return False
 
+    # Union the archives first, so the stop-detection below sees a stop made on
+    # either side, and no completed day is ever overwritten.
     remote.archives_down(root)
     remote.archives_up(root)
 
     local = _read_local_current(root)
     remote_current = remote.read_current()
-    winner, conflict = reconcile_current(local, remote_current)
+    plan = resolve_current(local, remote_current, _is_archived_locally(root))
 
-    if winner == "local":
-        if conflict and remote_current is not None:
-            _stash(root, remote_current, err)
+    if plan.stash is not None:
+        _stash(root, plan.stash, err)
+
+    if plan.action == "merge" and plan.merged is not None:
+        atomic_write_json(root / "current.json", plan.merged)
         remote.push_current(root)
-    elif winner == "remote":
-        if conflict and local is not None:
-            _stash(root, local, err)
-        remote.pull_current(root)
-    # "none": both idle, nothing to move.
+    elif plan.action == "push":
+        remote.push_current(root)
+    elif plan.action == "pull":
+        remote.pull_current(root)  # handles a VM gone idle by deleting the local file
+    else:  # "none": nothing live to move; honour any stop left behind below.
+        if plan.clear_local:
+            _remove(root / "current.json")
+        if plan.clear_remote:
+            remote.clear_current()
+
     return True
 
 
 def refresh_local(remote: "Remote", root: Path) -> None:
-    """Keep the local files a warm offline mirror after an online write.
+    """Mirror the VM down: pull the archives it has and this machine lacks, and the
+    one small ``current.json``.
 
-    Cheap by design: it pulls only archives the VM has and this machine lacks, and
-    the one small ``current.json``. Called after a *write* the VM performed --
-    never on a status poll -- so the cost lands a few times a day, not once a
-    second. It is what makes a sudden drop to offline pick up from the right
-    place instead of a stale one.
+    This is the *nothing-pending* path -- the Mac has made no un-synced change, so
+    the VM is the truth, and copying it down is what makes a pause, resume, stop or
+    start done from the web surface on the widget. It never pushes, so it can only
+    make the local files agree with the VM, never the other way.
     """
     remote.archives_down(root)
     remote.pull_current(root)
+
+
+def background_sync(remote: "Remote", root: Path, err: TextIO) -> None:
+    """One turn of the background syncer: reconcile with the VM, or note it is gone.
+
+    Called by the detached ``sync`` command -- after every local command and on the
+    widget's poll -- so it must be cheap in the common case and never raise. The
+    order is chosen so the once-a-second kicks mostly cost nothing:
+
+    * nothing owed and the mirror is fresh -> return without touching the network;
+    * the VM was just found unreachable -> wait out the cooldown, return;
+    * probe it once (this also warms the multiplexed connection). Unreachable ->
+      note it and return, to be retried by the next kick;
+    * otherwise, if there is offline work to fold in, :func:`flush_local` does the
+      reconcile; if not, :func:`refresh_local` mirrors the VM down. Either way the
+      sync is stamped, so the next idle kick can skip it.
+    """
+    pending = is_pending(root)
+    if not pending and synced_recently(root):
+        return
+    if offline_recent(root):
+        return
+    if not remote.reachable():
+        note_offline(root)
+        return
+
+    clear_offline(root)
+    if pending:
+        if flush_local(remote, root, err):
+            clear_pending(root)
+    else:
+        refresh_local(remote, root)
+    note_synced(root)
 
 
 # ---------------------------------------------------------------------------

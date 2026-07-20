@@ -18,6 +18,13 @@ final class TrackerModel: ObservableObject {
     private let client: TrackerClient
     private let viewer: Viewer
     private let queue = DispatchQueue(label: "work-tracker.poll")
+
+    /// A separate lane for button presses, so a `toggle` or `stop` never waits in
+    /// line behind a status poll. It only ever mattered once the poll could be
+    /// slow; now the CLI answers locally and returns at once, this keeps a button
+    /// instant even if a poll is briefly held up. Concurrent poll and act are safe:
+    /// the CLI's writes are atomic and O_EXCL-guarded, built for exactly this.
+    private let actions = DispatchQueue(label: "work-tracker.act")
     private var timer: Timer?
     private var complaintTask: Task<Void, Never>?
 
@@ -105,7 +112,7 @@ final class TrackerModel: ObservableObject {
     private func act(_ command: @escaping (TrackerClient) -> String?) {
         let client = self.client
 
-        queue.async {
+        actions.async {
             let complaint = command(client)
 
             // Re-read rather than assume: the CLI acts on what is on disk, and a
