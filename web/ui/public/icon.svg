@@ -1,17 +1,34 @@
-<!-- The author's mark, shared with ../portfolio: a pink `d` on the paper ground.
+<!-- The mark: a pink `d` on the paper ground, worn by both the portfolio and the
+     work-tracker — one author, two sites, and the tab is where you notice that
+     first. This file is byte-identical in the two repositories on purpose; if it
+     is edited in one, copy it to the other and recut the rasters in both.
 
-     This is the vector original, kept as a file rather than inlined as a data:
-     URI so the rasters beside it (favicon-32.png, apple-touch-icon.png) have one
-     source to be cut from, and so Safari -- which has never supported an SVG
-     favicon -- has something else to fall back to. See index.html.
+     This is the vector original, and the rasters beside it (favicon.ico,
+     apple-touch-icon.png) are cut from it, so there is one place to change the
+     letter and one shape it comes out as. It used to live inlined as a data: URI
+     in index.html and nowhere else, which was the whole problem: Safari has never
+     supported an SVG favicon at any version, so it quietly drew nothing, and iOS
+     reads only apple-touch-icon for a Home Screen tile and will not take a data:
+     URI for it. See index.html.
 
-     `Archivo` is named because ../portfolio names it, and it resolves to whatever
-     grotesque the viewer has: the font is not loaded anywhere (a favicon cannot
-     pull a webfont), and the portfolio has never loaded it either. The PNGs next
-     to this were cut with the same stack, so the mark is one letter in one shape
-     wherever it lands. -->
+     The `d` is an outline, not a <text> element, because it has to be: a favicon
+     is fetched on its own and cannot pull a webfont, so the earlier `font-family:
+     Archivo` resolved to whatever grotesque the viewer happened to have — and
+     Archivo is not loaded by either site anyway. The letter you saw was never the
+     letter the page sets. This one is: Zodiak, the face that carries every word
+     on both sites, at wght 700, its `d` drawn out of public/fonts/
+     Zodiak-Variable.woff2 with fontTools and baked flat. The ink bounding box —
+     not the advance box, whose sidebearings lean on a `d` — is centred on (50,50)
+     and scaled to 52 units tall.
+
+     To recut: instance the variable font at wght 700, draw the `d` through an
+     SVGPathPen under `translate(50,50) scale(s,-s) translate(-cx,-cy)` (the flip
+     is because fonts grow upward and SVG grows down), then screenshot this file
+     at 512 and downsample — rounded corners for favicon.ico's 16/32/48, and the
+     same artwork with the `rx` dropped for apple-touch-icon.png, which is
+     full-bleed and square on purpose: iOS masks its own squircle, and pre-rounded
+     corners would be rounded twice. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <rect width="100" height="100" rx="20" fill="#101014"/>
-  <text x="50" y="68" font-size="56" font-family="Archivo,sans-serif" font-weight="700"
-        fill="#EC4899" text-anchor="middle">d</text>
+  <path fill="#EC4899" d="M56.25 69.46H55.95Q53.97 72.69 50.87 74.34Q47.77 76 43.95 76Q39.51 76 35.78 73.78Q32.05 71.57 29.82 67.4Q27.6 63.23 27.6 57.46Q27.6 51.21 29.82 46.88Q32.05 42.56 35.86 40.31Q39.67 38.07 44.32 38.07Q47.45 38.07 50.11 39.32Q52.76 40.58 54.68 43.07V30.39Q54.68 29.16 54.14 28.58Q53.6 27.99 52.65 27.99H49.52V24H67.24V68.91Q67.24 70.14 67.79 70.72Q68.34 71.3 69.27 71.3H72.4V75.29H56.25ZM54.92 57.48Q54.92 50.34 53.19 46.95Q51.46 43.55 47.85 43.55Q44.28 43.55 42.53 46.93Q40.78 50.3 40.78 57.41Q40.78 64.3 42.53 67.57Q44.28 70.84 47.85 70.84Q51.46 70.84 53.19 67.58Q54.92 64.32 54.92 57.48Z"/>
 </svg>

@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import Backdrop from './components/Backdrop.jsx'
 import History from './components/History.jsx'
 import LiveSession from './components/LiveSession.jsx'
 import WidgetPortrait from './components/WidgetPortrait.jsx'
@@ -202,5 +203,13 @@ function Demonstration() {
 }
 
 export default function App() {
-  return DEMO ? <Demonstration /> : <Instrument />
+  return (
+    <>
+      {/* A sibling of the page, not a parent of it: wrapping the tree would open
+          a stacking context and bury the fixed grain body::before paints at
+          z-index 0 underneath this canvas. */}
+      <Backdrop />
+      {DEMO ? <Demonstration /> : <Instrument />}
+    </>
+  )
 }
