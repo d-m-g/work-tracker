@@ -113,7 +113,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from datetime import datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -127,11 +128,16 @@ from tracker.tracker import (  # noqa: E402
     WrongStateError,
 )
 from tracker.utils import CorruptJSONError, TrackerError  # noqa: E402
+from planner.planner import PlannerError  # noqa: E402
 from web.api import (  # noqa: E402
     UnknownCommandError,
+    build_calendar_payload,
+    build_plan_payload,
     build_sessions_payload,
+    build_stats_payload,
     build_status_payload,
     run_command,
+    run_plan_command,
 )
 from web.auth import (  # noqa: E402
     OWNER,
@@ -197,6 +203,7 @@ _MAX_BODY_BYTES = 64 * 1024
 #: the tracker itself is in trouble -- a corrupt file, an unwritable disk.
 _HTTP_STATUS: Tuple[Tuple[type, HTTPStatus], ...] = (
     (UnknownCommandError, HTTPStatus.NOT_FOUND),
+    (PlannerError, HTTPStatus.CONFLICT),
     (NoSuchSessionError, HTTPStatus.NOT_FOUND),
     (InvalidTaskError, HTTPStatus.BAD_REQUEST),
     (SessionAlreadyRunningError, HTTPStatus.CONFLICT),
@@ -206,6 +213,26 @@ _HTTP_STATUS: Tuple[Tuple[type, HTTPStatus], ...] = (
     (CorruptJSONError, HTTPStatus.INTERNAL_SERVER_ERROR),
     (TrackerError, HTTPStatus.INTERNAL_SERVER_ERROR),
 )
+
+
+def _week_window(query: str) -> Tuple[datetime, datetime]:
+    """``?from=ISO&to=ISO`` from the calendar page, checked: aware, ordered, <= 6 weeks.
+
+    Raises:
+        ValueError: If either is missing, malformed, naive, or the span is wrong.
+    """
+    params = parse_qs(query)
+    try:
+        start, end = (datetime.fromisoformat(params[key][0].replace("Z", "+00:00"))
+                      for key in ("from", "to"))
+    except (KeyError, ValueError):
+        raise ValueError("from and to must be ISO-8601 timestamps") from None
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("from and to must carry a UTC offset")
+    # Six weeks of days, plus slack: across a DST change those days run an hour long.
+    if not timedelta(0) < end - start <= timedelta(weeks=6, days=1):
+        raise ValueError("the window must be positive and at most six weeks")
+    return start, end
 
 
 def status_for(error: TrackerError) -> HTTPStatus:
@@ -634,12 +661,30 @@ class ViewerHandler(BaseHTTPRequestHandler):
             # would refuse the write whatever this page had been persuaded to
             # render. Telling the UI is courtesy; the refusal is the mechanism.
             self._serve_json(
-                build_status_payload,
+                partial(build_status_payload, viewer=role != OWNER),
                 "status",
                 extra={"login": self._auth is not None, "role": role},
             )
         elif path == "/api/sessions":
-            self._serve_json(build_sessions_payload, "sessions")
+            # The viewer reads one project's hours (web.api.VIEWER_PROJECT); the
+            # filter is applied here, on the server, where it cannot be edited out.
+            self._serve_json(partial(build_sessions_payload, viewer=role != OWNER), "sessions")
+        elif path in ("/api/plan", "/api/calendar", "/api/stats") and role != OWNER:
+            # The plan and the calendar are the owner's own, whatever their project.
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": "this account may not see the plan"})
+        elif path == "/api/plan":
+            self._serve_json(build_plan_payload, "plan")
+        elif path == "/api/stats":
+            self._serve_json(build_stats_payload, "stats")
+        elif path == "/api/calendar":
+            try:
+                start, end = _week_window(urlparse(self.path).query)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._serve_json(
+                lambda storage: build_calendar_payload(storage, start, end), "calendar"
+            )
         elif path.startswith("/api/"):
             self._send_json(HTTPStatus.NOT_FOUND, {"error": f"no such endpoint: {path}"})
         else:
@@ -708,7 +753,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         command = path[len("/api/") :]
         try:
-            result = run_command(self._storage, command, body)
+            if command.startswith("plan/"):
+                result = run_plan_command(self._storage, command[len("plan/"):], body)
+            else:
+                result = run_command(self._storage, command, body)
         except TrackerError as exc:
             self._send_json(status_for(exc), {"error": str(exc), "what": command})
             return

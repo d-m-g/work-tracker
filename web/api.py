@@ -28,8 +28,11 @@ it cannot compute a duration the CLI would disagree with.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import threading
+from datetime import datetime
+from typing import Any, Callable, Dict, List
 
+from planner.planner import Planner, PlannerError
 from tracker.models import SessionState
 from tracker.storage import Storage
 from tracker.tracker import Clock, InvalidTaskError, WorkTracker
@@ -39,8 +42,12 @@ __all__ = [
     "COMMANDS",
     "UnknownCommandError",
     "build_sessions_payload",
+    "build_calendar_payload",
+    "build_stats_payload",
+    "build_plan_payload",
     "build_status_payload",
     "run_command",
+    "run_plan_command",
 ]
 
 
@@ -53,7 +60,23 @@ class UnknownCommandError(TrackerError):
     """Raised when a POST names a command that does not exist."""
 
 
-def build_status_payload(storage: Storage, clock: Clock = now) -> Dict[str, Any]:
+#: The one project whose hours the read-only viewer account may see.
+VIEWER_PROJECT = "Pecto"
+
+
+def visible_to_viewer(project: Any) -> bool:
+    """Whether a session's hours are the viewer's business.
+
+    A session with no project is one the tracker always had -- started from the
+    widget, a Shortcut, the CLI -- and stays visible, as it always was. A session
+    the planner started for another project's task (ReQ, an errand) is not.
+    """
+    return project is None or str(project).casefold() == VIEWER_PROJECT.casefold()
+
+
+def build_status_payload(
+    storage: Storage, clock: Clock = now, viewer: bool = False
+) -> Dict[str, Any]:
     """Describe the live session, or report an idle tracker.
 
     The durations are computed server-side at request time, so the browser never
@@ -67,12 +90,15 @@ def build_status_payload(storage: Storage, clock: Clock = now) -> Dict[str, Any]
     tracker = WorkTracker(storage, clock=clock)
     status = tracker.status()
 
-    if not status.is_active:
+    # Another project's session, to the viewer, is no session at all.
+    if not status.is_active or (viewer and not visible_to_viewer(status.project)):
         return {
             "state": "idle",
             "id": None,
             "start": None,
             "task": None,
+            "taskId": None,
+            "project": None,
             "grossSeconds": 0,
             "workedSeconds": 0,
             "pausedSeconds": 0,
@@ -90,6 +116,8 @@ def build_status_payload(storage: Storage, clock: Clock = now) -> Dict[str, Any]
         "id": status.session_id,
         "start": format_timestamp(status.start) if status.start else None,
         "task": status.task,
+        "taskId": status.task_id,
+        "project": status.project,
         # gross = worked + paused, so the UI can derive the session's current
         # end as start + gross. That keeps the timeline anchored to the server's
         # clock instead of the browser's, which may be seconds adrift.
@@ -111,7 +139,7 @@ def build_status_payload(storage: Storage, clock: Clock = now) -> Dict[str, Any]
     }
 
 
-def build_sessions_payload(storage: Storage) -> Dict[str, Any]:
+def build_sessions_payload(storage: Storage, viewer: bool = False) -> Dict[str, Any]:
     """List every archived session, newest first, with aggregate totals.
 
     A session file that cannot be parsed does not sink the whole response. It is
@@ -125,7 +153,10 @@ def build_sessions_payload(storage: Storage) -> Dict[str, Any]:
 
     for path in storage.list_sessions():
         try:
-            sessions.append(storage.load_session(path).to_dict())
+            session = storage.load_session(path)
+            if viewer and not visible_to_viewer(session.project):
+                continue
+            sessions.append(session.to_dict())
         except CorruptJSONError as exc:
             unreadable.append({"file": path.name, "error": str(exc)})
 
@@ -198,7 +229,7 @@ def run_command(
     result: Dict[str, Any] = {"action": command}
 
     if command == "start":
-        tracker.start(_task_of(body))
+        tracker.start(_task_of(body), body.get("taskId"), body.get("project"))
     elif command == "pause":
         tracker.pause()
     elif command == "resume":
@@ -206,14 +237,16 @@ def run_command(
     elif command == "toggle":
         # The action a toggle *chose* is the interesting half of its answer:
         # "started", "paused" or "resumed" is what the UI announces.
-        result["action"] = str(tracker.toggle(_task_of(body)).action)
+        result["action"] = str(
+            tracker.toggle(_task_of(body), body.get("taskId"), body.get("project")).action
+        )
     elif command == "stop":
         completed, _path = tracker.stop()
         result["session"] = completed.to_dict()
     elif command == "task":
         session_id = body.get("id")
         if session_id is None:
-            tracker.set_task(_task_of(body))
+            tracker.set_task(_task_of(body), body.get("taskId"), body.get("project"))
         elif isinstance(session_id, str):
             result["session"] = tracker.set_archived_task(session_id, _task_of(body)).to_dict()
         else:
@@ -221,3 +254,95 @@ def run_command(
 
     result["status"] = build_status_payload(storage, clock=clock)
     return result
+
+
+# ---------------------------------------------------------------------------
+# the planner
+# ---------------------------------------------------------------------------
+
+#: What the browser may ask of the planner, as ``POST /api/plan/<command>``.
+PLAN_COMMANDS = frozenset(
+    {"add", "edit", "done", "delete", "start", "stop", "replan", "hours", "pin", "unpin", "event",
+     "link", "review", "work"}
+)
+
+
+def build_plan_payload(storage: Storage) -> Dict[str, Any]:
+    """``GET /api/plan``: the tasks, their blocks, and what is on now."""
+    return Planner(storage.root).payload()
+
+
+def build_stats_payload(storage: Storage) -> Dict[str, Any]:
+    """``GET /api/stats``: the analysis, for the Insights page."""
+    return Planner(storage.root).stats()
+
+
+def build_calendar_payload(storage: Storage, start: datetime, end: datetime) -> Dict[str, Any]:
+    """``GET /api/calendar``: Apple Calendar's events in a window, for the week view."""
+    planner = Planner(storage.root)
+    if planner.calendar is None:
+        return {"events": [], "available": False, "error": None}
+    try:
+        return {"events": planner.calendar.events(start, end), "available": True, "error": None}
+    except Exception as exc:  # a week view without meetings beats no week view
+        return {"events": [], "available": True, "error": str(exc)}
+
+
+def _in_background(work: Callable[[], None]) -> None:
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _task_id(body: Dict[str, Any]) -> int:
+    value = body.get("id")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PlannerError("name the task by its id")
+    return value
+
+
+def run_plan_command(
+    storage: Storage,
+    command: str,
+    body: Dict[str, Any],
+    background: Callable[[Callable[[], None]], None] = _in_background,
+) -> Dict[str, Any]:
+    """Run one planner command; answer with the plan and the tracker status after it.
+
+    ``add`` answers at once with the task still parsing -- the few seconds Claude
+    takes happen in the background, and the page polls until they are over.
+    """
+    if command not in PLAN_COMMANDS:
+        raise UnknownCommandError(f"no such planner command: {command!r}")
+    planner = Planner(storage.root)
+    if command == "add":
+        task_id = planner.add(body.get("text"))
+        background(lambda: Planner(storage.root).parse(task_id))
+    elif command == "edit":
+        changes = body.get("changes")
+        if not isinstance(changes, dict):
+            raise PlannerError("say what to change")
+        planner.edit(_task_id(body), changes)
+    elif command == "done":
+        planner.done(_task_id(body), body.get("minutes"))
+    elif command == "delete":
+        planner.delete(_task_id(body))
+    elif command == "start":
+        planner.start(_task_id(body))
+    elif command == "stop":
+        planner.stop(body.get("outcome"))
+    elif command == "hours":
+        planner.set_hours(body.get("hours"))
+    elif command == "pin":
+        planner.pin(_task_id(body), body.get("start"), body.get("end"), body.get("pin"))
+    elif command == "unpin":
+        planner.unpin(body.get("pin"))
+    elif command == "work":
+        planner.retime_work(body.get("work"), body.get("start"), body.get("end"))
+    elif command == "event":
+        planner.edit_event(body)
+    elif command == "link":
+        planner.link(body.get("session"), body.get("task"))
+    elif command == "review":
+        planner.review()
+    else:
+        planner.replan()
+    return {"action": command, "plan": planner.payload(), "status": build_status_payload(storage)}

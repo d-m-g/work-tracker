@@ -14,7 +14,7 @@ function reloadForLogin() {
   return new Promise(() => {})
 }
 
-async function getJSON(url) {
+export async function getJSON(url) {
   const response = await fetch(url, { cache: 'no-store' })
   if (response.status === 401) return reloadForLogin()
 
@@ -28,7 +28,7 @@ async function getJSON(url) {
   return payload
 }
 
-async function postJSON(url, body) {
+export async function postJSON(url, body) {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

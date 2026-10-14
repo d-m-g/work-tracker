@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import unittest
+from datetime import date
 
 from support import TrackerTestCase
 
 from tracker.models import SessionState
 from tracker.tracker import (
+    InvalidTaskError,
     NoActiveSessionError,
     SessionAlreadyRunningError,
     ToggleAction,
@@ -278,6 +280,84 @@ class TestFullDayScenario(TrackerTestCase):
             completed.worked_seconds + completed.paused_seconds,
             "gross must always be worked + paused",
         )
+
+
+class TestReport(TrackerTestCase):
+    """EPOCH is Tue 2026-07-14, so its week runs 2026-07-13 .. 2026-07-19."""
+
+    def _work(self, seconds: int, task: str | None = None) -> None:
+        """One complete session of ``seconds`` at the clock's current day."""
+        self.tracker.start(task)
+        self.clock.advance(seconds)
+        self.tracker.stop()
+
+    def test_week_totals_per_day_and_excludes_other_weeks(self) -> None:
+        self._work(3600, "parser")
+        self.clock.advance(20 * 3600)  # into Wed 2026-07-15
+        self._work(1800)
+        self.clock.advance(7 * 24 * 3600)  # into the following week
+        self._work(600)
+
+        report = self.tracker.report("week", date(2026, 7, 14))
+
+        self.assertEqual(date(2026, 7, 13), report.start)
+        self.assertEqual(date(2026, 7, 19), report.end)
+        self.assertEqual(5400, report.worked_seconds)
+        self.assertEqual(2, report.session_count)
+        self.assertEqual(
+            [date(2026, 7, 14), date(2026, 7, 15)], [d.day for d in report.days]
+        )
+        self.assertEqual(("parser",), report.days[0].tasks)
+
+    def test_month_spans_the_calendar_month(self) -> None:
+        self._work(3600)
+        self.clock.advance(7 * 24 * 3600)  # still July
+        self._work(1800)
+
+        report = self.tracker.report("month", date(2026, 7, 14))
+
+        self.assertEqual(date(2026, 7, 1), report.start)
+        self.assertEqual(date(2026, 7, 31), report.end)
+        self.assertEqual(5400, report.worked_seconds)
+        self.assertEqual(2, report.session_count)
+
+    def test_the_session_in_progress_counts(self) -> None:
+        self.tracker.start()
+        self.clock.advance(600)
+
+        report = self.tracker.report("week")
+
+        self.assertEqual(600, report.worked_seconds)
+        self.assertEqual(1, report.session_count)
+
+    def test_an_empty_period_reports_zero(self) -> None:
+        report = self.tracker.report("month")
+        self.assertEqual(0, report.worked_seconds)
+        self.assertEqual((), report.days)
+
+    def test_an_unknown_period_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self.tracker.report("fortnight")
+
+
+class TestTaskId(TrackerTestCase):
+    def test_the_task_id_survives_into_the_archive(self) -> None:
+        self.tracker.start("billing fix", task_id="12")
+        self.assertEqual("12", self.tracker.status().task_id)
+        completed, _ = self.tracker.stop()
+        self.assertEqual("12", completed.task_id)
+        self.assertEqual("12", self.tracker.archived(completed.id).task_id)
+
+    def test_a_relabel_by_hand_unlinks_the_session(self) -> None:
+        self.tracker.start("billing fix", task_id="12")
+        self.assertIsNone(self.tracker.set_task("lunch").task_id)
+
+    def test_an_unlinked_session_writes_no_task_id_key(self) -> None:
+        self.assertNotIn("taskId", self.tracker.start().to_dict())
+
+    def test_a_task_id_with_spaces_is_refused(self) -> None:
+        with self.assertRaises(InvalidTaskError):
+            self.tracker.start(task_id="1 2")
 
 
 if __name__ == "__main__":

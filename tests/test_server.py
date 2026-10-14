@@ -28,11 +28,13 @@ from __future__ import annotations
 import json
 import unittest
 from contextlib import redirect_stderr
+from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Optional, Tuple
 
+from tracker.models import CompletedSession
 from tracker.storage import Storage
 from web.auth import COOKIE_NAME, OWNER, VIEWER, Authenticator, hash_password
 from web.server import (
@@ -346,6 +348,66 @@ class TestTheStatusPayloadNamesTheAccount(HandlerTestCase):
     def test_an_open_server_still_writes(self) -> None:
         status, _ = self.send("POST", "/api/start", body={}, open_mode=True)
         self.assertEqual(200, status)
+
+
+class TestTheViewerSeesOnlyPecto(HandlerTestCase):
+    """The viewer reads Pecto's hours; another project's, and the plan, stay the owner's."""
+
+    def start(self, **body: Any) -> None:
+        self.send("POST", "/api/start", body=body, cookie=self.cookie_for(OWNER))
+
+    def stop(self) -> None:
+        self.send("POST", "/api/stop", body={}, cookie=self.cookie_for(OWNER))
+
+    def sessions_for(self, role: str) -> list:
+        return self.send("GET", "/api/sessions", cookie=self.cookie_for(role))[1]["sessions"]
+
+    def test_another_projects_live_session_is_idle_to_the_viewer(self) -> None:
+        self.start(task="call the bank", taskId="2", project="ReQ")
+        _, body = self.send("GET", "/api/status", cookie=self.cookie_for(VIEWER))
+        self.assertEqual("idle", body["state"])
+        self.assertIsNone(body["task"])
+        _, body = self.send("GET", "/api/status", cookie=self.cookie_for(OWNER))
+        self.assertEqual("running", body["state"])  # the control
+
+    def test_a_pecto_session_is_shown_and_case_does_not_matter(self) -> None:
+        self.start(task="onboarding copy", taskId="1", project="pecto")
+        _, body = self.send("GET", "/api/status", cookie=self.cookie_for(VIEWER))
+        self.assertEqual("running", body["state"])
+
+    def test_the_archive_is_filtered_and_its_totals_with_it(self) -> None:
+        start = datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc)
+        for hour, task, project in ((9, "plain", None), (11, "call the bank", "ReQ")):
+            begin = start.replace(hour=hour)
+            self.storage.archive(CompletedSession(
+                id=begin.strftime("%Y-%m-%d_%H-%M-%S"), start=begin,
+                end=begin + timedelta(hours=1), gross_seconds=3600, paused_seconds=0,
+                worked_seconds=3600, task=task, project=project,
+            ))
+
+        viewer = self.sessions_for(VIEWER)
+        self.assertEqual(["plain"], [s["task"] for s in viewer])
+        self.assertEqual(2, len(self.sessions_for(OWNER)))
+        _, body = self.send("GET", "/api/sessions", cookie=self.cookie_for(VIEWER))
+        self.assertEqual(1, body["totals"]["count"])
+
+    def test_the_plan_and_the_calendar_are_refused_to_the_viewer(self) -> None:
+        for path in ("/api/plan", "/api/stats", "/api/calendar?from=2026-10-05T00:00:00%2B03:00"
+                                               "&to=2026-10-12T00:00:00%2B03:00"):
+            status, _ = self.send("GET", path, cookie=self.cookie_for(VIEWER))
+            self.assertEqual(403, status, path)
+
+    def test_every_planner_write_is_refused_to_the_viewer(self) -> None:
+        for command in ("add", "edit", "done", "delete", "start", "stop", "replan", "hours",
+                        "pin", "unpin", "event", "link", "review"):
+            status, _ = self.send("POST", f"/api/plan/{command}", body={},
+                                  cookie=self.cookie_for(VIEWER))
+            self.assertEqual(403, status, command)
+
+    def test_the_owner_reads_the_plan(self) -> None:
+        status, body = self.send("GET", "/api/plan", cookie=self.cookie_for(OWNER))
+        self.assertEqual(200, status)
+        self.assertEqual([], body["tasks"])
 
 
 class TestLoginNamesItsAccount(HandlerTestCase):

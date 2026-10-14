@@ -86,7 +86,7 @@ export function spanOf(session) {
  * `pauseStart` is the pause that has not finished yet: it runs to the live edge,
  * which is what makes a paused session read as still open rather than stopped.
  */
-function blocksOf(session) {
+export function blocksOf(session) {
   const { start, end } = spanOf(session)
 
   const pauses = [...(session.pauses ?? [])]

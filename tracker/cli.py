@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from typing import Final, Optional, TextIO
 
@@ -36,7 +37,7 @@ from .remote import (
     remote_from_env,
 )
 from .storage import Storage
-from .tracker import Status, ToggleAction, ToggleResult, WorkTracker
+from .tracker import Report, Status, ToggleAction, ToggleResult, WorkTracker
 from .utils import TrackerError, format_duration, format_timestamp
 
 __all__ = ["build_parser", "main"]
@@ -124,6 +125,52 @@ def _render_status(status: Status) -> str:
     return "\n".join(lines)
 
 
+def _render_report(report: Report) -> str:
+    """Render a :class:`Report` as the human-readable ``report`` output."""
+    title = (
+        f"Week {report.start} .. {report.end}"
+        if report.period == "week"
+        else report.start.strftime("%B %Y")
+    )
+    lines = [title]
+    if not report.days:
+        lines.append("(no work recorded)")
+    for day in report.days:
+        line = (
+            f"{day.day.strftime('%a %Y-%m-%d')}  "
+            f"{format_duration(day.worked_seconds):>9}  "
+            f"{day.session_count} session(s)"
+        )
+        if day.tasks:
+            line += "  " + "; ".join(day.tasks)
+        lines.append(line)
+    lines.append(
+        f"Total: {format_duration(report.worked_seconds)}"
+        f" across {report.session_count} session(s) on {len(report.days)} day(s)"
+    )
+    return "\n".join(lines)
+
+
+def _report_payload(report: Report) -> dict[str, object]:
+    """Render a :class:`Report` as a JSON-serialisable dict (for ``--json``)."""
+    return {
+        "period": report.period,
+        "start": str(report.start),
+        "end": str(report.end),
+        "workedSeconds": report.worked_seconds,
+        "sessions": report.session_count,
+        "days": [
+            {
+                "date": str(day.day),
+                "workedSeconds": day.worked_seconds,
+                "sessions": day.session_count,
+                "tasks": list(day.tasks),
+            }
+            for day in report.days
+        ],
+    }
+
+
 def _status_payload(status: Status) -> dict[str, object]:
     """Render a :class:`Status` as a JSON-serialisable dict (for ``--json``)."""
     return {
@@ -131,6 +178,8 @@ def _status_payload(status: Status) -> dict[str, object]:
         "id": status.session_id,
         "start": format_timestamp(status.start) if status.start else None,
         "task": status.task,
+        "taskId": status.task_id,
+        "project": status.project,
         "workedSeconds": status.worked_seconds,
         "pausedSeconds": status.paused_seconds,
         "pauses": status.pause_count,
@@ -143,7 +192,7 @@ def _status_payload(status: Status) -> dict[str, object]:
 
 
 def _cmd_start(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> int:
-    session = tracker.start(args.task)
+    session = tracker.start(args.task, args.task_id, args.project)
     if args.json:
         json.dump(session.to_dict(), out, indent=2)
         out.write("\n")
@@ -173,7 +222,7 @@ def _cmd_resume(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> 
 
 
 def _cmd_toggle(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> int:
-    result = tracker.toggle(args.task)
+    result = tracker.toggle(args.task, args.task_id, args.project)
     if args.json:
         # The action is what distinguishes this command's output from start's,
         # pause's or resume's, so it leads; the session document follows.
@@ -241,7 +290,7 @@ def _cmd_task(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> in
         )
         task = session.task
     elif setting:
-        task = tracker.set_task(label).task
+        task = tracker.set_task(label, args.task_id, args.project).task
     else:
         task = tracker.task()
 
@@ -255,6 +304,16 @@ def _cmd_task(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> in
     return EXIT_OK
 
 
+def _cmd_report(tracker: WorkTracker, args: argparse.Namespace, out: TextIO) -> int:
+    report = tracker.report(args.period, args.date)
+    if args.json:
+        json.dump(_report_payload(report), out, indent=2)
+        out.write("\n")
+    else:
+        print(_render_report(report), file=out)
+    return EXIT_OK
+
+
 #: Maps a subcommand name to its handler. Adding a command means adding a row
 #: here and a parser below -- no branching logic to touch.
 _COMMANDS: Final[dict[str, object]] = {
@@ -265,6 +324,7 @@ _COMMANDS: Final[dict[str, object]] = {
     "stop": _cmd_stop,
     "status": _cmd_status,
     "task": _cmd_task,
+    "report": _cmd_report,
 }
 
 
@@ -280,6 +340,23 @@ def _add_start_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="TEXT",
         help="what you are working on (optional; can be set or changed later)",
+    )
+    _add_task_id_argument(parser)
+
+
+def _add_task_id_argument(parser: argparse.ArgumentParser) -> None:
+    """``--task-id`` and ``--project``: the planner task a session is spent on."""
+    parser.add_argument(
+        "--task-id",
+        default=None,
+        metavar="ID",
+        help="the planner task this session is for (optional)",
+    )
+    parser.add_argument(
+        "--project",
+        default=None,
+        metavar="NAME",
+        help="the project that task belongs to (optional)",
     )
 
 
@@ -301,6 +378,24 @@ def _add_task_arguments(parser: argparse.ArgumentParser) -> None:
         help="the task to record; omit to print the one already recorded",
     )
     mood.add_argument("--clear", action="store_true", help="remove the recorded task")
+    _add_task_id_argument(parser)
+
+
+def _add_report_arguments(parser: argparse.ArgumentParser) -> None:
+    """Which period ``report`` totals, and which one of them."""
+    parser.add_argument(
+        "period",
+        choices=("week", "month"),
+        help="total the work done per day over a week or a month",
+    )
+    # argparse turns the ValueError from a malformed date into bad usage (exit 2).
+    parser.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="any day inside the period wanted (default: today)",
+    )
 
 
 #: Extra arguments, by subcommand. A command absent from here takes none.
@@ -308,6 +403,7 @@ _ARGUMENTS: Final[dict[str, object]] = {
     "start": _add_start_arguments,
     "toggle": _add_start_arguments,
     "task": _add_task_arguments,
+    "report": _add_report_arguments,
 }
 
 
@@ -339,6 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
         "stop": "end the session and archive it under sessions/",
         "status": "show the current state, worked time, paused time and pause count",
         "task": "show, set or clear what a session is being spent on",
+        "report": "total the work done per day over the week or the month",
         "sync": "(internal) reconcile the local files with the VM in the background",
     }
     for name, help_text in descriptions.items():
@@ -431,7 +528,7 @@ def _run_remote(root: Path, args: argparse.Namespace, out: TextIO, err: TextIO) 
     the network, so a dead connection can never make the caller wait.
     """
     result = _run_local(root, args, out, err)
-    if args.command != "status":  # a write: there is local work to push up
+    if args.command not in ("status", "report"):  # a write: local work to push up
         mark_pending(root)
     _kick_sync(root)
     return result

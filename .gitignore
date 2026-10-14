@@ -46,3 +46,9 @@ __pycache__/
 .session_secret
 .password
 .password-viewer
+
+# The planner: its database (tasks, the event log, the plan) and the compiled
+# EventKit bridge. Your data and a build product, not source.
+/planner.db
+/planner.db-journal
+/.planner-build/

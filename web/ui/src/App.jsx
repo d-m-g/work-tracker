@@ -1,7 +1,11 @@
 import { useMemo } from 'react'
 import Backdrop from './components/Backdrop.jsx'
+import Calendar from './components/Calendar.jsx'
 import History from './components/History.jsx'
+import Insights from './components/Insights.jsx'
 import LiveSession from './components/LiveSession.jsx'
+import Planner from './components/Planner.jsx'
+import Reports from './components/Reports.jsx'
 import WidgetPortrait from './components/WidgetPortrait.jsx'
 import { isDemo, useDemoTracker } from './lib/demo.js'
 import { axisFor, daysOf, spillOf, todayOf } from './lib/timeline.js'
@@ -23,6 +27,9 @@ const AXIS = axisFor()
  * the first render and the two hooks are never swapped for one another.
  */
 const DEMO = isDemo()
+
+/** Which page: the day (`/`) or the week as a calendar (`/calendar`). Read once, like DEMO. */
+const PAGE = { '/calendar': 'calendar', '/insights': 'insights' }[window.location.pathname.replace(/\/+$/, '')] ?? 'today'
 
 /**
  * The viewer.
@@ -68,6 +75,12 @@ function Viewer({ tracker, demo = false }) {
   // back cut, holding this side of it. See lib/timeline.js.
   const today = useMemo(() => (live ? todayOf(live) : null), [live])
 
+  // The calendar is the owner's: it holds the plan and the calendar, which are
+  // never the viewer's (the server refuses both). A viewer who types the URL
+  // gets the ordinary page.
+  const calendarPage = PAGE === 'calendar' && !readOnly && !demo
+  const insightsPage = PAGE === 'insights' && !readOnly && !demo
+
   // The other side of that cut: hours worked before midnight are not today's, so
   // they go where the rest of the past is, on the day they happened. It is null
   // unless a midnight was actually crossed, and then the history is exactly the
@@ -99,7 +112,7 @@ function Viewer({ tracker, demo = false }) {
   }, [sessions, spill, today, live])
 
   return (
-    <main className="page">
+    <main className={`page ${calendarPage ? 'page--wide page--fill' : ''}`}>
       {demo && <DemoNotice />}
 
       <header className="masthead">
@@ -113,6 +126,19 @@ function Viewer({ tracker, demo = false }) {
               ? 'Someone else’s hours, as they are recorded. Read-only.'
               : 'Start, pause and stop from here, the shortcuts, or the CLI.'}
           </p>
+          {!readOnly && !demo && (
+            <nav className="masthead__nav" aria-label="Pages">
+              <a href="/" aria-current={calendarPage || insightsPage ? undefined : 'page'}>
+                Today
+              </a>
+              <a href="/calendar" aria-current={calendarPage ? 'page' : undefined}>
+                Calendar
+              </a>
+              <a href="/insights" aria-current={insightsPage ? 'page' : undefined}>
+                Insights
+              </a>
+            </nav>
+          )}
         </div>
 
         {/* Only when there is a session to end. On a loopback server with no
@@ -142,28 +168,42 @@ function Viewer({ tracker, demo = false }) {
         </p>
       )}
 
-      <LiveSession
-        status={status}
-        today={today}
-        axis={AXIS}
-        busy={busy}
-        send={send}
-        readOnly={readOnly}
-      />
+      {insightsPage ? (
+        <Insights />
+      ) : calendarPage ? (
+        <Calendar status={status} sessions={sessions} send={send} />
+      ) : (
+        <>
+          <LiveSession
+            status={status}
+            today={today}
+            axis={AXIS}
+            busy={busy}
+            send={send}
+            readOnly={readOnly}
+          />
 
-      {/* Only in the demo, and only here: on the real page the widget is three
-          inches away on your own screen, and a picture of it would be a picture of
-          something you are already looking at. */}
-      {demo && <WidgetPortrait status={status} />}
+          {/* Only in the demo, and only here: on the real page the widget is three
+              inches away on your own screen, and a picture of it would be a picture of
+              something you are already looking at. */}
+          {demo && <WidgetPortrait status={status} />}
 
-      <History
-        days={days}
-        totals={totals}
-        unreadable={sessions?.unreadable ?? []}
-        axis={AXIS}
-        send={send}
-        readOnly={readOnly}
-      />
+          {/* The plan is the owner's alone (the server refuses it to the viewer), and
+              it lives on the server's disk, so the demo has none to show either. */}
+          {!demo && !readOnly && <Planner status={status} axis={AXIS} />}
+
+          <Reports days={days} live={live} today={today} />
+
+          <History
+            days={days}
+            totals={totals}
+            unreadable={sessions?.unreadable ?? []}
+            axis={AXIS}
+            send={send}
+            readOnly={readOnly}
+          />
+        </>
+      )}
     </main>
   )
 }

@@ -45,10 +45,17 @@ struct MiniPlayer: View {
 
     private var snapshot: Snapshot { model.snapshot }
 
+    /// What the hover line says: the session's task, or -- with nothing running --
+    /// the task the planner has on now or next, so the plan can be read the same
+    /// way a session can.
+    private var hoverText: String? {
+        snapshot.task ?? (snapshot.state == .idle ? model.planned?.title : nil)
+    }
+
     /// A task, and someone reaching for it. Either half missing and the caption
     /// stays as it was -- there is nothing to swap to on a session that was never
     /// given a name.
-    private var showingTask: Bool { reading && snapshot.task != nil }
+    private var showingTask: Bool { reading && hoverText != nil }
 
     var body: some View {
         HStack(spacing: 11) {
@@ -162,7 +169,7 @@ struct MiniPlayer: View {
                     .opacity(showingTask ? 0 : 1)
                     .offset(y: showingTask ? -3 : 0)
 
-                if let task = snapshot.task {
+                if let task = hoverText {
                     // Ink, where the state is recessive ink: this is the line you
                     // asked for, so for as long as you hold it, it is the one you
                     // are meant to be reading.
@@ -200,15 +207,24 @@ struct MiniPlayer: View {
     }
 
     private var captionText: String {
+        let planned = model.planned
         switch snapshot.state {
         case .running:
+            // On the planned task, inside its block: how much of the block is left.
+            if let planned, planned.when == .now, snapshot.taskId == String(planned.taskId) {
+                return "RUNNING · \(Clock.left(until: planned.end)) LEFT"
+            }
             return snapshot.pauses == 0
                 ? "RUNNING"
                 : "RUNNING · \(snapshot.pauses) BREAK\(snapshot.pauses == 1 ? "" : "S")"
         case .paused:
             return "PAUSED · \(Clock.duration(snapshot.pausedSeconds))"
         case .idle:
-            return "NO SESSION"
+            switch planned?.when {
+            case .now?: return "NOW · \(Clock.left(until: planned!.end)) LEFT"
+            case .next?: return "NEXT · \(Clock.when(planned!.start))"
+            case nil: return "NO SESSION"
+            }
         }
     }
 
@@ -228,11 +244,17 @@ struct MiniPlayer: View {
 
             Group {
                 // One button for the whole day, the way a play/pause button works.
+                // Idle, play asks what you are starting: the two likeliest tasks,
+                // or something new in your own words. Otherwise it is the
+                // play/pause it always was.
                 Control(
                     symbol: snapshot.state == .running ? "pause.fill" : "play.fill",
                     help: toggleHelp,
-                    action: model.toggle
+                    action: choosesFirst ? model.choose : model.toggle
                 )
+                .popover(isPresented: $model.choosing, arrowEdge: .bottom) {
+                    Chooser(model: model)
+                }
 
                 // Stopping is a separate, deliberate act, and it only exists when
                 // there is something to stop.
@@ -247,12 +269,69 @@ struct MiniPlayer: View {
         }
     }
 
+    private var choosesFirst: Bool { snapshot.state == .idle && model.hasPlanner }
+
     private var toggleHelp: String {
         switch snapshot.state {
         case .running: return "Pause"
         case .paused: return "Resume"
-        case .idle: return "Start a session"
+        case .idle:
+            return model.hasPlanner ? "Start… — choose what you are starting" : "Start a session"
         }
+    }
+}
+
+/// What ▶ opens with nothing running: the two likeliest tasks, one tap each (or ⌘1,
+/// ⌘2), and a line for something new. Whatever you pick starts linked to its task,
+/// so no session is left to sort out later.
+private struct Chooser: View {
+    @ObservedObject var model: TrackerModel
+    @State private var text = ""
+    @FocusState private var typing: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("WHAT ARE YOU STARTING?")
+                .font(Face.label(9))
+                .kerning(1.3)
+                .foregroundStyle(Palette.ink2)
+
+            ForEach(Array(model.guesses.enumerated()), id: \.element.id) { index, guess in
+                Button { model.start(guess) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(guess.title)
+                            .font(Face.label(13))
+                            .foregroundStyle(Palette.ink)
+                            .lineLimit(1)
+                        Text("\(guess.reason.uppercased())  ·  ⌘\(index + 1)")
+                            .font(Face.label(8))
+                            .kerning(1)
+                            .foregroundStyle(Palette.ink2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Palette.live.opacity(0.16)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.live.opacity(0.45)))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+            }
+
+            HStack(spacing: 6) {
+                TextField("Something new…", text: $text)
+                    .textFieldStyle(.roundedBorder)
+                    .font(Face.label(12))
+                    .focused($typing)
+                    .onSubmit { model.startNew(text) }
+                Button("Start") { model.startNew(text) }
+                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(12)
+        .frame(width: 270)
+        .onAppear { typing = true }
     }
 }
 
@@ -391,5 +470,18 @@ enum Clock {
     static func duration(_ seconds: Int) -> String {
         let (major, tail) = split(seconds)
         return major + tail
+    }
+
+    /// "45M" or "1H 05M" until `end`, never negative.
+    static func left(until end: Date) -> String {
+        let minutes = max(0, Int(end.timeIntervalSinceNow / 60))
+        return minutes < 60 ? "\(minutes)M" : String(format: "%dH %02dM", minutes / 60, minutes % 60)
+    }
+
+    /// "14:55" today, "MON 14:55" on any other day.
+    static func when(_ date: Date) -> String {
+        let format = DateFormatter()
+        format.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "EEE HH:mm"
+        return format.string(from: date).uppercased()
     }
 }

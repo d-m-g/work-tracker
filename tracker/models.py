@@ -147,6 +147,25 @@ def normalise_task(raw: Any) -> str | None:
     return " ".join(raw.split()) or None
 
 
+def _link_entries(task_id: str | None, project: str | None) -> dict[str, Any]:
+    """``taskId`` and ``project`` when set, else nothing -- an unlinked session's
+    file stays byte-for-byte what it was before the fields existed."""
+    entries: dict[str, Any] = {}
+    if task_id is not None:
+        entries["taskId"] = task_id
+    if project is not None:
+        entries["project"] = project
+    return entries
+
+
+def _task_id_of(payload: dict[str, Any]) -> str | None:
+    """Read the optional ``taskId``, refusing anything but text or null."""
+    raw = payload.get("taskId")
+    if raw is not None and not isinstance(raw, str):
+        raise CorruptJSONError(f"'taskId' must be a string or null, got {type(raw).__name__}")
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # pause
 # ---------------------------------------------------------------------------
@@ -237,6 +256,11 @@ class ActiveSession:
     pause_start: datetime | None = None
     pauses: list[Pause] = field(default_factory=list)
     task: str | None = None
+    #: The planner task this session is spent on, if the planner started it.
+    task_id: str | None = None
+    #: That task's project ("Pecto"), copied here so a server with no planner
+    #: database -- the VM -- can still tell whose hours these are.
+    project: str | None = None
 
     def __post_init__(self) -> None:
         is_paused = self.state is SessionState.PAUSED
@@ -248,29 +272,45 @@ class ActiveSession:
         # ActiveSession that exists -- however it was built -- already holds a
         # clean label. There is no route into the object that skips this.
         self.task = normalise_task(self.task)
+        self.project = normalise_task(self.project)
 
     # -- construction -------------------------------------------------------
 
     @classmethod
-    def begin(cls, moment: datetime, task: str | None = None) -> "ActiveSession":
+    def begin(
+        cls,
+        moment: datetime,
+        task: str | None = None,
+        task_id: str | None = None,
+        project: str | None = None,
+    ) -> "ActiveSession":
         """Start a brand-new session at ``moment``, optionally naming its task."""
         return cls(
             id=moment.strftime(_ID_FORMAT),
             start=moment,
             state=SessionState.RUNNING,
             task=task,
+            task_id=task_id,
+            project=project,
         )
 
     # -- transitions --------------------------------------------------------
 
-    def set_task(self, task: str | None) -> None:
+    def set_task(
+        self, task: str | None, task_id: str | None = None, project: str | None = None
+    ) -> None:
         """Record what the session is being spent on. ``None`` clears it.
 
         Not a state transition -- a session's task can change (or arrive late)
         without the clock noticing, which is precisely the point: you can write
         down what you were doing at any time, including after the fact.
+
+        A relabel is a reassignment, so it replaces ``task_id`` and ``project``
+        too: a label typed by hand unlinks the session from the task it named.
         """
         self.task = normalise_task(task)
+        self.task_id = task_id
+        self.project = normalise_task(project)
 
     def pause(self, moment: datetime) -> None:
         """Move from ``RUNNING`` to ``PAUSED``.
@@ -332,6 +372,7 @@ class ActiveSession:
             "task": self.task,
             "pauseStart": format_timestamp(self.pause_start) if self.pause_start else None,
             "pauses": [pause.to_dict() for pause in self.pauses],
+            **_link_entries(self.task_id, self.project),
         }
 
     @classmethod
@@ -362,6 +403,8 @@ class ActiveSession:
             pause_start=pause_start,
             pauses=_pauses_from_list(payload.get("pauses", [])),
             task=payload.get("task"),  # validated by __post_init__
+            task_id=_task_id_of(payload),
+            project=payload.get("project"),  # validated by __post_init__
         )
 
 
@@ -388,12 +431,15 @@ class CompletedSession:
     pauses: list[Pause] = field(default_factory=list)
     status: SessionStatus = SessionStatus.COMPLETED
     task: str | None = None
+    task_id: str | None = None
+    project: str | None = None
 
     def __post_init__(self) -> None:
         # The class is frozen, so the normalised label has to be written past the
         # freeze. The alternative -- normalising at each of the three construction
         # sites -- is one rule stated three times, and three places for it to drift.
         object.__setattr__(self, "task", normalise_task(self.task))
+        object.__setattr__(self, "project", normalise_task(self.project))
 
     @classmethod
     def from_active(cls, session: ActiveSession, end: datetime) -> "CompletedSession":
@@ -415,6 +461,8 @@ class CompletedSession:
             pauses=list(session.pauses),
             status=SessionStatus.COMPLETED,
             task=session.task,
+            task_id=session.task_id,
+            project=session.project,
         )
 
     def with_task(self, task: str | None) -> "CompletedSession":
@@ -443,6 +491,7 @@ class CompletedSession:
             "pausedSeconds": self.paused_seconds,
             "workedSeconds": self.worked_seconds,
             "pauses": [pause.to_dict() for pause in self.pauses],
+            **_link_entries(self.task_id, self.project),
         }
 
     @classmethod
@@ -477,4 +526,6 @@ class CompletedSession:
             pauses=_pauses_from_list(payload.get("pauses", [])),
             status=status,
             task=payload.get("task"),  # validated by __post_init__
+            task_id=_task_id_of(payload),
+            project=payload.get("project"),  # validated by __post_init__
         )

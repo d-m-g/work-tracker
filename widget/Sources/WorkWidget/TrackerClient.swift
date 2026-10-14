@@ -28,6 +28,9 @@ struct Snapshot: Equatable {
     /// tracker and optional here: most sessions never get one.
     var task: String?
 
+    /// The planner task the session is for, when the planner started it.
+    var taskId: String?
+
     /// Set when the tracker could not be read at all. Reported, never repaired --
     /// the widget will not guess what a corrupt file meant.
     var fault: String?
@@ -52,6 +55,40 @@ private struct StatusPayload: Decodable {
     /// Absent from a payload written before the tracker learned about tasks, and
     /// null whenever the session simply has none. Both mean the same thing.
     let task: String?
+    let taskId: String?
+}
+
+/// The planned block the widget offers: the one on now, or else the next one.
+struct PlannedBlock: Equatable {
+    enum When { case now, next }
+
+    let when: When
+    let taskId: Int
+    let title: String
+    let start: Date
+    let end: Date
+}
+
+/// A task you are likely about to start, and why -- the start chooser's options.
+struct Guess: Identifiable, Equatable, Decodable {
+    let id: Int
+    let title: String
+    let reason: String
+}
+
+/// The part of `planner.py --json list` the widget reads.
+private struct PlanPayload: Decodable {
+    struct Block: Decodable {
+        let task_id: Int
+        let title: String
+        let start: String
+        let end: String
+    }
+
+    let now: Block?
+    let next: Block?
+    /// Absent from a planner too old to suggest anything; then there is nothing to offer.
+    let suggestions: [Guess]?
 }
 
 enum TrackerError: LocalizedError {
@@ -81,6 +118,10 @@ struct TrackerClient {
     let environment: [String: String]
 
     var script: URL { root.appendingPathComponent("tracker.py") }
+
+    /// The planner, beside the tracker. Optional: a checkout without one simply
+    /// has no plan to show, and the widget is the widget it always was.
+    var planner: URL { root.appendingPathComponent("planner.py") }
 
     // MARK: - locating the tracker
 
@@ -189,6 +230,40 @@ struct TrackerClient {
         }
     }
 
+    /// The block to offer: on now, or next. Never throws -- no planner, an
+    /// unreadable reply, or an empty plan all mean the same thing here: nothing
+    /// to offer, and the widget carries on as a plain tracker.
+    func plan() -> (block: PlannedBlock?, guesses: [Guess]) {
+        guard FileManager.default.fileExists(atPath: planner.path),
+              let out = try? run(["--json", "list"], script: planner),
+              let payload = try? JSONDecoder().decode(PlanPayload.self, from: out)
+        else { return (nil, []) }
+
+        let iso = ISO8601DateFormatter()
+        func block(_ raw: PlanPayload.Block?, _ when: PlannedBlock.When) -> PlannedBlock? {
+            guard let raw, let start = iso.date(from: raw.start), let end = iso.date(from: raw.end) else {
+                return nil
+            }
+            return PlannedBlock(when: when, taskId: raw.task_id, title: raw.title, start: start, end: end)
+        }
+        return (block(payload.now, .now) ?? block(payload.next, .next), payload.suggestions ?? [])
+    }
+
+    /// Whether there is a planner to start tasks through at all.
+    var hasPlanner: Bool { FileManager.default.fileExists(atPath: planner.path) }
+
+    /// Something not on the list: the planner makes it a task and starts it now,
+    /// parsing the words in the background so the clock does not wait for Claude.
+    func startNew(_ text: String) -> String? {
+        attempt(["start-new", text], script: planner)
+    }
+
+    /// Start a planned task: the planner starts the tracker with its task id and
+    /// project attached, ending whatever session was running.
+    func startPlanned(_ taskId: Int) -> String? {
+        attempt(["start", String(taskId)], script: planner)
+    }
+
     // MARK: - writing (through the CLI, which stays the only writer)
 
     /// Start, pause or resume -- whichever the state calls for. Like ⌘F8, and
@@ -199,9 +274,9 @@ struct TrackerClient {
     func stop() -> String? { attempt(["stop"]) }
 
     /// Returns nil on success, or the CLI's own one-line complaint on failure.
-    private func attempt(_ arguments: [String]) -> String? {
+    private func attempt(_ arguments: [String], script: URL? = nil) -> String? {
         do {
-            _ = try run(arguments)
+            _ = try run(arguments, script: script ?? self.script)
             return nil
         } catch {
             return message(for: error)
@@ -215,10 +290,10 @@ struct TrackerClient {
     }
 
     @discardableResult
-    private func run(_ arguments: [String]) throws -> Data {
+    private func run(_ arguments: [String], script: URL? = nil) throws -> Data {
         let process = Process()
         process.executableURL = python
-        process.arguments = [script.path] + arguments
+        process.arguments = [(script ?? self.script).path] + arguments
         process.currentDirectoryURL = root
         process.environment = environment
 
@@ -252,7 +327,8 @@ struct TrackerClient {
             pausedSeconds: payload.pausedSeconds,
             pauses: payload.pauses,
             start: payload.start.flatMap { ISO8601DateFormatter().date(from: $0) },
-            task: payload.task
+            task: payload.task,
+            taskId: payload.taskId
         )
     }
 

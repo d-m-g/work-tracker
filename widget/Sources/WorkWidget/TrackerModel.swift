@@ -1,11 +1,25 @@
 // What the view watches. It owns the poll loop and nothing else.
 
+import AppKit
 import Combine
 import Foundation
 
 @MainActor
 final class TrackerModel: ObservableObject {
     @Published private(set) var snapshot: Snapshot = .unknown
+
+    /// What the planner has on now, or next -- nil when there is no planner or
+    /// nothing planned. Read far less often than the clock: a plan changes when
+    /// you change it, not every second.
+    @Published private(set) var planned: PlannedBlock?
+
+    /// The likeliest tasks to start, best first, for the start chooser.
+    @Published private(set) var guesses: [Guess] = []
+
+    /// The start chooser is open: ▶ was pressed with nothing running.
+    @Published var choosing = false
+
+    var hasPlanner: Bool { client.hasPlanner }
 
     /// A refusal from the CLI -- "a session is already in progress", say. Shown
     /// briefly, then cleared: it is a reply to a button press, not a state.
@@ -26,6 +40,7 @@ final class TrackerModel: ObservableObject {
     /// the CLI's writes are atomic and O_EXCL-guarded, built for exactly this.
     private let actions = DispatchQueue(label: "work-tracker.act")
     private var timer: Timer?
+    private var planTimer: Timer?
     private var complaintTask: Task<Void, Never>?
 
     init(client: TrackerClient) {
@@ -38,6 +53,23 @@ final class TrackerModel: ObservableObject {
     func start() {
         refresh()
         schedule()
+        refreshPlan()
+        let planTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshPlan() }
+        }
+        RunLoop.main.add(planTimer, forMode: .common)
+        self.planTimer = planTimer
+    }
+
+    private func refreshPlan() {
+        let client = self.client
+        queue.async {
+            let (planned, guesses) = client.plan()
+            Task { @MainActor in
+                self.planned = planned
+                self.guesses = guesses
+            }
+        }
     }
 
     /// The tracker is polled, not watched, so the interval is the whole cost of
@@ -92,6 +124,33 @@ final class TrackerModel: ObservableObject {
         act { $0.stop() }
     }
 
+    /// Start the task the planner has on now (or next), with its id attached.
+    func startPlanned() {
+        guard let taskId = planned?.taskId else { return toggle() }
+        act { $0.startPlanned(taskId) }
+    }
+
+    /// Open the start chooser -- and bring the app forward, so you can type in it.
+    func choose() {
+        refreshPlan()
+        NSApp.activate(ignoringOtherApps: true)
+        choosing = true
+    }
+
+    /// Start one of the guesses.
+    func start(_ guess: Guess) {
+        choosing = false
+        act { $0.startPlanned(guess.id) }
+    }
+
+    /// Start something new, named in your own words.
+    func startNew(_ text: String) {
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return }
+        choosing = false
+        act { $0.startNew(words) }
+    }
+
     /// Open the web viewer, starting its server first if nothing is answering.
     func openViewer() {
         guard !openingViewer else { return }
@@ -123,6 +182,7 @@ final class TrackerModel: ObservableObject {
                 self.snapshot = snapshot
                 self.show(complaint)
                 self.schedule()
+                self.refreshPlan()  // a start or a stop is exactly when the plan moves
             }
         }
     }

@@ -43,6 +43,9 @@
 
   --work: #ec4899; /* portfolio --color-accent */
   --live: #f472b6; /* portfolio --color-accent-soft */
+  /* A static block: placed by hand, fixed. Warm and solid, never pink, so it is
+     not mistaken for worked time (pink fill) or a plan (pink outline). */
+  --static: #f5b041;
   --on-work: #0a0a0c; /* portfolio --color-on-accent — 6.2:1 on the accent */
 
   /* A fault is red, not pink — but pink is now the brand, and red beside
@@ -102,6 +105,13 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* No sideways swipe ever leaves the page: the calendar scrolls through days that
+   way, and a swipe that reached the page would start the browser's back gesture. */
+html,
+body {
+  overscroll-behavior-x: none;
 }
 
 body {
@@ -215,6 +225,123 @@ html::before {
   padding-left: max(1.5rem, env(safe-area-inset-left, 0px));
   padding-right: max(1.5rem, env(safe-area-inset-right, 0px));
 }
+
+/* The calendar takes the whole window: a week wants its width. */
+.page--wide {
+  max-width: none;
+}
+
+/* ...and exactly its height. The page does not scroll; the grid does, alone --
+   one scroll, the way a calendar app has it, with the header always in view. */
+.page--fill {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+}
+
+.page--fill > * {
+  flex: none;
+}
+
+/* Everything above the grid is made small, so the grid gets the height. */
+.page--fill {
+  padding-top: calc(1rem + env(safe-area-inset-top, 0px));
+}
+
+.page--fill .masthead {
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.6rem;
+}
+
+.page--fill .masthead__titles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1.75rem;
+}
+
+.page--fill .masthead h1 {
+  font-size: 1.35rem;
+}
+
+/* The strapline says what the tracker is for; the calendar page shows it. */
+.page--fill .masthead__titles > p {
+  display: none;
+}
+
+.page--fill .masthead__nav {
+  margin-top: 0;
+}
+
+.page--fill .cal__bar {
+  margin-bottom: 0.5rem;
+}
+
+.page--fill .cal__arrow {
+  width: 32px;
+  height: 32px;
+  font-size: 1.1rem;
+}
+
+.page--fill .cal__where .cal__range {
+  font-size: 1.15rem;
+}
+
+.page--fill .cal__today,
+.page--fill .cal__views .chip {
+  min-height: 30px;
+}
+
+.page--fill .cal__legend {
+  margin-bottom: 0.6rem;
+  font-size: 0.7rem;
+}
+
+/* A day's heading on one line: MON 28 · 2h 25m. */
+.page--fill .cal__day {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.page--fill .cal__date {
+  font-size: 1.05rem;
+}
+
+.page--fill .calendar {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+
+.page--fill .calendar > * {
+  flex: none;
+}
+
+.page--fill .cal__scroll {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+.page--fill .cal {
+  flex: 1;
+  min-height: 0;
+  /* Without this a flex child is as wide as its content -- six weeks of days --
+     and the page scrolls sideways instead of the calendar. */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+
 
 .masthead {
   display: flex;
@@ -594,6 +721,1389 @@ html::before {
 .strip__edge--held {
   animation: none;
   opacity: 0.55;
+}
+
+/* ---------- the plan ---------- */
+
+.planner {
+  margin-bottom: 3.5rem;
+}
+
+/* Planned time is ink not yet laid down: the accent as an outline over a wash,
+   so a plan is never mistaken for work done. */
+.strip__seg--plan {
+  background: rgba(236, 72, 153, 0.22);
+  box-shadow: inset 0 0 0 1px var(--work);
+  transform-origin: left center;
+  animation: ink-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.day .strip__seg--plan {
+  animation-delay: calc(var(--row) * 45ms);
+}
+
+/* A calendar event on a strip: its calendar's own colour, solid. */
+.strip__seg--event {
+  background: color-mix(in srgb, var(--cal, #8e8e93) 75%, var(--card));
+  box-shadow: 0 0 0 1.5px var(--card);
+  transform-origin: left center;
+  animation: ink-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.strip__seg--pin {
+  background: var(--static);
+  box-shadow: 0 0 0 1.5px var(--card);
+  transform-origin: left center;
+  animation: ink-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* A plan row is read, not opened: no pointer, no tint. */
+.plan-day {
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .plan-day:hover {
+    background: none;
+  }
+  .plan-day:hover .day__date {
+    text-decoration: none;
+  }
+}
+
+.plan-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+/* The least of the section's errands, set in the label voice. */
+.plan-head__replan {
+  margin-left: 0.75rem;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-2);
+  font-family: var(--face-label);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.plan-head__replan:not(:disabled):hover {
+  color: var(--ink);
+  border-bottom-color: var(--work);
+}
+
+/* What is on now: the same lifted card as the live session, smaller. */
+.plan-now {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: var(--lift);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.plan-now__title {
+  margin: 0.4rem 0 0;
+  font-family: var(--face-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.plan-now .controls {
+  margin-top: 1rem;
+}
+
+.planner .start {
+  margin: 0 0 2rem;
+}
+
+.plan-tasks {
+  border-top: 1px solid var(--rule);
+}
+
+/* The captions that say what each part of the plan is. */
+.plan-sub {
+  margin: 1.75rem 0 0.6rem;
+}
+
+/* A caption that opens and closes the section under it. */
+.plan-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plan-toggle:hover {
+  color: var(--ink);
+}
+
+.plan-toggle__arrow {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.plan-toggle[aria-expanded='true'] .plan-toggle__arrow {
+  transform: rotate(90deg);
+}
+
+.plan-toggle__summary {
+  margin-left: auto;
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 0.8rem;
+}
+
+/* Sessions to sort. */
+.inbox {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+
+.inbox__item {
+  display: grid;
+  grid-template-columns: 14rem 1fr;
+  gap: 0.35rem 1rem;
+  align-items: center;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.inbox__when {
+  font-size: 0.78rem;
+}
+
+.inbox__label {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.inbox__choices {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.inbox__linked {
+  font-size: 0.8rem;
+  margin-right: 0.3rem;
+}
+
+.inbox__linked strong {
+  color: var(--ink);
+}
+
+.inbox__other {
+  min-height: 30px;
+  padding: 0.15rem 0.5rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.75rem;
+  color-scheme: dark;
+}
+
+/* A figure with a word under it saying what it is ("worked", "next block"). */
+.plan-task__figure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+}
+
+.plan-task__caption {
+  font-family: var(--face-label);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  opacity: 0.8;
+}
+
+.day__row.plan-task {
+  grid-template-columns: 1fr 8rem 10rem;
+}
+
+.plan-task:disabled {
+  cursor: default;
+}
+
+.plan-task .day__worked {
+  font-size: 0.85rem;
+  text-align: right;
+  padding-right: 1rem;
+}
+
+.plan-task__next {
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-align: right;
+}
+
+/* Late is the plan saying no, so it wears the refusal's colour — as text only:
+   it is a warning about a task, not a fault in the instrument. */
+.plan-task__next--late {
+  color: var(--fault);
+}
+
+.day__open.plan-edit {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.plan-edit__raw {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.plan-edit__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.85rem 1rem;
+}
+
+.plan-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.plan-field > span {
+  font-family: var(--face-label);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.plan-field--wide {
+  grid-column: 1 / -1;
+}
+
+.plan-field input:not([type='checkbox']),
+.plan-field select {
+  min-height: 40px;
+  padding: 0.4rem 0.6rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  color-scheme: dark;
+}
+
+.plan-field input:focus,
+.plan-field select:focus {
+  outline: none;
+  border-color: var(--work);
+}
+
+.plan-field input:disabled {
+  opacity: 0.45;
+}
+
+.plan-field--check {
+  flex-direction: row;
+  align-items: center;
+  align-self: end;
+  min-height: 40px;
+}
+
+.plan-field--check input {
+  accent-color: var(--work);
+}
+
+.plan-edit__delete {
+  margin-left: auto;
+}
+
+.plan-done {
+  margin: 1.25rem 0 0;
+  font-size: 0.8rem;
+}
+
+/* ---------- when to plan ---------- */
+
+.hours__days {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.hours__day {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.45rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.hours__day--deep {
+  margin-top: 0.5rem;
+  border-top-color: var(--ink-2);
+}
+
+.hours__name {
+  font-family: var(--face-label);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.hours__windows {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hours__off {
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.hours__window {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.hours__window input {
+  min-height: 34px;
+  padding: 0.25rem 0.4rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  color-scheme: dark;
+}
+
+.hours__window input:focus {
+  outline: none;
+  border-color: var(--work);
+}
+
+.hours__remove {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ink-2);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hours__remove:hover {
+  color: var(--ink);
+  background: var(--row-hover);
+}
+
+.hours__help {
+  font-size: 0.75rem;
+}
+
+.hours__window input[type='number'] {
+  width: 5.5rem;
+}
+
+/* What does not fit: the refusal's colours, because it is the plan saying no. */
+.shortfalls {
+  margin: 0 0 1.5rem;
+}
+
+.shortfalls__title {
+  color: var(--fault);
+  margin-bottom: 0.5rem;
+}
+
+.shortfalls__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.shortfalls__list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.4rem 0;
+}
+
+.shortfalls__list li + li {
+  border-top: 1px solid rgba(248, 113, 113, 0.15);
+}
+
+.shortfalls__list strong {
+  color: var(--ink);
+}
+
+.shortfalls__fixes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.plan-head__replan[aria-expanded='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--work);
+}
+
+/* ---------- tags ---------- */
+
+/* The kind of work, as a small rounded tag beside a task's title. Each kind has
+   its own tint; deep takes the accent, since deep work is what the hours protect. */
+.tag {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.45rem 0.1rem;
+  border: 1px solid;
+  border-radius: 999px;
+  font-family: var(--face-label);
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+  vertical-align: 0.12em;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.tag--deep {
+  background: rgba(236, 72, 153, 0.14);
+  border-color: rgba(236, 72, 153, 0.55);
+  color: var(--live);
+}
+
+.tag--shallow {
+  background: rgba(161, 161, 170, 0.1);
+  border-color: rgba(161, 161, 170, 0.4);
+  color: var(--ink-2);
+}
+
+.tag--errand {
+  background: rgba(45, 212, 191, 0.1);
+  border-color: rgba(45, 212, 191, 0.45);
+  color: #5eead4;
+}
+
+.plan-task__title {
+  min-width: 0;
+}
+
+/* ---------- small controls ---------- */
+
+/* A chip is a button in the label voice: for the many small changes a task takes,
+   where a 44px block per change would bury the list in buttons. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0.2rem 0.6rem;
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-family: var(--face-label);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.chip:not(:disabled):hover {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+
+.chip:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* The current choice: filled with the row tint, ringed in the accent. Not dimmed
+   like a disabled chip, though it cannot be pressed -- it is the answer. */
+.chip--on,
+.chip--on:disabled {
+  opacity: 1;
+  background: var(--row-hover);
+  border-color: var(--work);
+  color: var(--ink);
+}
+
+.chip--go {
+  background: var(--work);
+  border-color: var(--work);
+  color: var(--on-work);
+}
+
+.chip--go:not(:disabled):hover {
+  color: var(--on-work);
+  filter: brightness(1.08);
+}
+
+.chip--warn,
+.chip--warn:not(:disabled):hover {
+  background: var(--fault-bg);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--fault);
+}
+
+.plan-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.1rem;
+  padding: 0 0 0.85rem;
+  margin-top: -0.35rem;
+}
+
+.plan-quick__group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.plan-quick__end {
+  margin-left: auto;
+}
+
+.plan-quick__label {
+  font-family: var(--face-label);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin-right: 0.15rem;
+}
+
+.plan-quick__value {
+  min-width: 3.6rem;
+  text-align: center;
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.8rem;
+}
+
+/* ---------- pages ---------- */
+
+.masthead__nav {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.9rem;
+}
+
+.masthead__nav a {
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid transparent;
+  color: var(--ink-2);
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.masthead__nav a:hover {
+  color: var(--ink);
+}
+
+.masthead__nav a[aria-current='page'] {
+  color: var(--ink);
+  border-bottom-color: var(--work);
+}
+
+/* ---------- insights ---------- */
+
+.insights__week,
+.insights__review {
+  margin-bottom: 1.5rem;
+}
+
+.insights__week .figures {
+  border-top: 0;
+  padding-top: 0.75rem;
+}
+
+.insights__review-text {
+  margin: 0.6rem 0 0;
+  font-size: 1rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.insights__head {
+  margin: 3rem 0 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.insights__lede {
+  margin: 0 0 1.25rem;
+  font-size: 0.82rem;
+}
+
+.insights__cols {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2rem;
+}
+
+.insights__cols--two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.insights__punctual {
+  border-top: 0;
+  padding-top: 0;
+  margin-bottom: 1.5rem;
+}
+
+.insights__rows li {
+  grid-template-columns: 1fr auto 4rem;
+}
+
+.insights__empty {
+  padding: 0.75rem 0;
+  font-size: 0.82rem;
+}
+
+.insights__dodged li {
+  grid-template-columns: 1fr auto;
+}
+
+.insights__wins {
+  margin: 1.25rem 0 0;
+  font-size: 0.85rem;
+}
+
+.ratio {
+  white-space: nowrap;
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.85rem;
+}
+
+.ratio--long {
+  color: var(--fault);
+}
+
+.ratio--quick {
+  color: #5eead4;
+}
+
+.ratio__word {
+  font-family: var(--face-label);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+}
+
+/* Slot reliability: the more often a slot's planned work happened, the more ink. */
+.slots {
+  border-collapse: separate;
+  border-spacing: 4px;
+  min-width: 34rem;
+}
+
+.slots th {
+  padding: 0.2rem 0.4rem;
+  text-align: left;
+  font-weight: 600;
+}
+
+.slots__cell {
+  width: 4.5rem;
+  height: 2.6rem;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 0.8rem;
+  background: color-mix(in srgb, var(--work) calc(var(--rate, 0) * 80%), var(--track));
+}
+
+.slots__cell--avoided {
+  outline: 1px dashed var(--fault);
+  outline-offset: -2px;
+}
+
+@media (max-width: 40rem) {
+  .insights__cols {
+    grid-template-columns: 1fr;
+  }
+
+  .inbox__item {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- the week ---------- */
+
+.calendar {
+  margin-bottom: 3.5rem;
+}
+
+/* The bar over the calendar: where you are, how to move, how much to show. */
+.cal__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.cal__where {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.cal__arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+  color: var(--ink);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cal__arrow:hover {
+  border-color: var(--work);
+}
+
+.cal__where .cal__range {
+  margin: 0 0.5rem;
+  font-size: clamp(1.15rem, 2.5vw, 1.5rem);
+  white-space: nowrap;
+}
+
+.cal__today {
+  min-height: 36px;
+  padding: 0.35rem 0.9rem;
+}
+
+.cal__views {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cal__views .chip {
+  min-height: 34px;
+  padding: 0.25rem 0.85rem;
+}
+
+.cal__views .cal__total {
+  margin: 0 0 0 0.75rem;
+}
+
+.cal__hint {
+  margin-left: auto;
+  font-style: italic;
+}
+
+/* The slot being picked for a new task: an outline of where it will go. */
+.cal__block--new {
+  z-index: 4;
+  background: rgba(236, 72, 153, 0.12);
+  border: 1.5px dashed var(--work);
+  color: var(--ink);
+  pointer-events: none;
+}
+
+.cal__compose {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+.cal__range {
+  margin: 0.3rem 0 0;
+  font-family: var(--face-display);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.cal__nav {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cal__total {
+  margin-right: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.cal__legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 1rem;
+  font-size: 0.75rem;
+}
+
+.cal__key {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  margin-left: 0.6rem;
+  border-radius: 2px;
+}
+
+.cal__key:first-child {
+  margin-left: 0;
+}
+
+.cal__key--work {
+  background: var(--work);
+}
+
+.cal__key--plan {
+  background: rgba(236, 72, 153, 0.22);
+  box-shadow: inset 0 0 0 1px var(--work);
+}
+
+/* A calendar's own colour, as Apple Calendar shows it: a wash and a solid edge. */
+.cal__key--event {
+  background: color-mix(in srgb, var(--cal, #8e8e93) 35%, var(--card));
+  box-shadow: inset 2px 0 0 var(--cal, #8e8e93);
+}
+
+.cal__key--overdue {
+  background: color-mix(in srgb, var(--fault) 22%, var(--card));
+  box-shadow: inset 0 0 0 1px var(--fault);
+}
+
+.cal__key--done {
+  background: color-mix(in srgb, #4ade80 30%, var(--card));
+  box-shadow: inset 2px 0 0 #4ade80;
+  opacity: 0.7;
+}
+
+/* "How long did it take?", asked in place of the Done button. */
+.plan-done {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.plan-done__ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.plan-done__ask input {
+  width: 4.5rem;
+  padding: 0.25rem 0.4rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink);
+  font: inherit;
+  color-scheme: dark;
+}
+
+.plan-done__ask input:focus {
+  outline: none;
+  border-color: var(--work);
+}
+
+.cal__key--pin {
+  background: var(--static);
+}
+
+.cal__key--open {
+  background: rgba(250, 250, 250, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(250, 250, 250, 0.12);
+}
+
+.cal__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* On a phone the week keeps its shape and scrolls sideways: seven days crushed
+   into 360px would be seven slivers nobody can read. */
+.cal__scroll {
+  overflow-x: auto;
+  margin-inline: -0.25rem;
+  padding-inline: 0.25rem;
+}
+
+/* The calendar is one scroller, both ways: down through the hours, sideways
+   through the days. Day headings stick to the top and hours to the left, and a
+   day snaps into place when a sideways scroll comes to rest. */
+.cal {
+  position: relative;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: x proximity;
+  scroll-padding-left: 36px;
+  /* The days held slide as you scroll, and the calendar keeps its place itself;
+     the browser's own scroll anchoring would correct the same jump twice. */
+  overflow-anchor: none;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: var(--lift);
+}
+
+.cal__canvas {
+  flex: none;
+  width: calc(36px + var(--days) * var(--col));
+}
+
+.cal__row {
+  display: grid;
+  grid-template-columns: 36px repeat(var(--days), var(--col));
+}
+
+.cal__row--head {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--card);
+}
+
+.cal__day,
+.cal__col {
+  scroll-snap-align: start;
+}
+
+.cal__month {
+  font-size: 0.7rem;
+  color: var(--live);
+}
+
+.calendar .cal__scroll {
+  overflow: hidden;
+}
+
+
+.cal__grid {
+  height: calc(var(--hour) * 24);
+}
+
+.cal--dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.cal__day {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  padding: 0.7rem 0.6rem 0.6rem;
+  border-left: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.cal__corner {
+  position: sticky;
+  left: 0;
+  z-index: 7;
+  background: var(--card);
+  border-bottom: 1px solid var(--rule);
+}
+
+.cal__date {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 1.25rem;
+  font-weight: 500;
+  line-height: 1.1;
+  color: var(--ink-2);
+}
+
+.cal__day--today .cal__date {
+  color: var(--ink);
+}
+
+.cal__day--today .eyebrow {
+  color: var(--live);
+}
+
+.cal__worked {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.72rem;
+}
+
+.cal__hours {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  height: 100%;
+  background: var(--card);
+}
+
+.cal__hour {
+  position: absolute;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.62rem;
+  color: var(--ink-2);
+}
+
+.cal__hour:first-child {
+  transform: none;
+}
+
+/* Hour lines are drawn by the column itself -- one gradient, no element per hour. */
+.cal__col {
+  position: relative;
+  height: 100%;
+  /* Empty time is somewhere to put a task: pressing on it says so. */
+  cursor: cell;
+  touch-action: pan-x;
+  border-left: 1px solid var(--rule);
+  background-image: linear-gradient(to bottom, var(--rule) 1px, transparent 1px);
+  background-size: 100% var(--hour);
+}
+
+.cal__col--today {
+  background-color: rgba(236, 72, 153, 0.035);
+}
+
+/* Two lanes per day: the plan and the calendar on the left, what was worked on
+   the right -- so intention and record are read side by side. */
+.cal__block {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0.15rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+
+.cal__lane--all {
+  left: 3px;
+  right: 3px;
+}
+
+.cal__lane--plan {
+  left: 3px;
+  width: calc(55% - 5px);
+}
+
+.cal__lane--did {
+  right: 3px;
+  width: calc(45% - 3px);
+}
+
+.cal__block--work {
+  background: var(--work);
+  color: var(--on-work);
+}
+
+/* Work on a task that is finished: green, dimmed, crossed out. */
+.cal__block--done {
+  background: color-mix(in srgb, #4ade80 30%, var(--card));
+  box-shadow: inset 3px 0 0 #4ade80;
+  color: var(--ink);
+  opacity: 0.55;
+}
+
+.cal__block--done .cal__title {
+  text-decoration: line-through;
+}
+
+/* The session still running: lighter, and breathing, like the live edge. */
+.cal__block--live {
+  background: var(--live);
+  color: var(--on-work);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+.cal__block--event {
+  background: color-mix(in srgb, var(--cal, #8e8e93) 30%, var(--card));
+  box-shadow: inset 3px 0 0 var(--cal, #8e8e93);
+  padding-left: 0.45rem;
+  color: var(--ink);
+}
+
+/* The hours the planner may fill: a faint lit band behind everything else, so
+   where work *could* go reads before what is in it. */
+.cal__open {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(250, 250, 250, 0.035);
+  box-shadow:
+    inset 0 1px 0 rgba(250, 250, 250, 0.08),
+    inset 0 -1px 0 rgba(250, 250, 250, 0.08);
+  pointer-events: none;
+}
+
+.cal__block--plan {
+  background: rgba(236, 72, 153, 0.18);
+  box-shadow: inset 0 0 0 1px var(--work);
+  color: var(--ink);
+}
+
+/* Static: put there by hand and kept there. Its own colour, solid like a calendar
+   event -- it is as fixed as one now -- and warm, so it never reads as worked time. */
+.cal__block--pin {
+  background: var(--static);
+  color: var(--on-work);
+}
+
+/* Booked after its task is due: the fault colour, as a wash and an edge, so a
+   plan that cannot make its deadline is seen where it fails, not only in a list. */
+.cal__block--overdue,
+.cal__block--pin.cal__block--overdue {
+  background: color-mix(in srgb, var(--fault) 22%, var(--card));
+  box-shadow: inset 0 0 0 1.5px var(--fault);
+  color: var(--ink);
+}
+
+.cal__overdue {
+  color: var(--fault);
+  font-weight: 600;
+}
+
+.cal__block--movable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.cal__block--dragging {
+  z-index: 3;
+  opacity: 0.85;
+  box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.7);
+  cursor: grabbing;
+}
+
+.cal__block--selected,
+.cal__block:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+  z-index: 2;
+}
+
+/* The card a click opens, kept in view at the foot of the window however far the
+   grid is scrolled. */
+.cal__detail {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  z-index: 10;
+  width: min(30rem, calc(100vw - 2rem));
+  transform: translateX(-50%);
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.8);
+  padding: 1.1rem 1.25rem;
+}
+
+.cal__field {
+  margin-top: 0.6rem;
+}
+
+.cal__when {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.cal__problem {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+}
+
+/* A planned block's card holds the task's whole editor, so it is wider, and
+   scrolls rather than running off a short window. */
+.cal__detail--wide {
+  width: min(44rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2.5rem);
+  overflow-y: auto;
+}
+
+.cal__detail .plan-edit {
+  padding-bottom: 0;
+}
+
+.cal__detail .controls {
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.cal__close {
+  margin-left: auto;
+}
+
+.cal__dot {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--cal);
+}
+
+.cal__title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inside a block the tag rides the title line, smaller still; the title gives
+   way (ellipsis) before the tag does. */
+.cal__head-line {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.cal__head-line .cal__title {
+  min-width: 0;
+}
+
+.cal__block .tag {
+  flex: none;
+  margin: 0;
+  font-size: 0.5rem;
+  padding: 0 0.35rem;
+}
+
+/* On a static block's amber the tints would vanish; the tag goes dark instead. */
+.cal__block--pin .tag {
+  background: rgba(10, 10, 12, 0.18);
+  border-color: rgba(10, 10, 12, 0.4);
+  color: var(--on-work);
+}
+
+.cal__clock {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.6rem;
+  opacity: 0.8;
+}
+
+.cal__now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--live);
+  box-shadow: 0 0 0 1px var(--card);
+  z-index: 2;
+}
+
+/* ---------- reports ---------- */
+
+.reports {
+  margin-bottom: 3.5rem;
+}
+
+.reports__cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+  align-items: start;
+}
+
+.report__title {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.report__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.report__rows li {
+  display: grid;
+  grid-template-columns: 1fr auto 4.5rem;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+}
+
+.report__label {
+  font-size: 0.85rem;
+}
+
+.report__worked {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+/* Words about the number beside it ("13 days"), in the label voice like
+   .day__breaks — not a second measurement. */
+.report__days {
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-align: right;
 }
 
 /* ---------- history ---------- */
@@ -1159,6 +2669,30 @@ html::before {
   .day__open {
     padding-left: 0;
     padding-right: 0;
+  }
+
+  .day__row.plan-task {
+    grid-template-columns: 1fr auto;
+  }
+  .plan-task__next {
+    order: 3;
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
+  .plan-now {
+    padding: 1.1rem 1.25rem;
+  }
+
+  .hours__day {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  /* Two lists side by side have no room on a phone; they stack instead. */
+  .reports__cols {
+    grid-template-columns: 1fr;
+    gap: 1.75rem;
   }
 
   /* A session's line stacks rather than being crushed into three columns: the

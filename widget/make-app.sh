@@ -64,6 +64,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
     <key>LSMinimumSystemVersion</key>    <string>13.0</string>
     <key>LSUIElement</key>               <true/>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>The planner plans your tasks around your calendar, and writes the plan to a Planned calendar.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>The planner plans your tasks around your calendar, and writes the plan to a Planned calendar.</string>
 </dict>
 </plist>
 PLIST

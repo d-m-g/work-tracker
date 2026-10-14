@@ -21,9 +21,10 @@ the truth, acts on it, and writes atomically.
 
 from __future__ import annotations
 
+from calendar import monthrange
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +42,10 @@ from .storage import NoSuchSessionError, SessionExistsError, Storage
 from .utils import CorruptJSONError, TrackerError, now
 
 __all__ = [
+    "DayTotal",
     "InvalidTaskError",
     "NoActiveSessionError",
+    "Report",
     "SessionAlreadyRunningError",
     "Status",
     "ToggleAction",
@@ -50,6 +53,7 @@ __all__ = [
     "WorkTracker",
     "WrongStateError",
     "checked_task",
+    "checked_task_id",
 ]
 
 
@@ -99,6 +103,19 @@ def checked_task(raw: Any) -> str | None:
     return task
 
 
+def checked_task_id(raw: Any) -> str | None:
+    """A planner task id offered by a caller: short text without spaces, or ``None``.
+
+    Raises:
+        InvalidTaskError: If ``raw`` is anything else.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw or len(raw) > 64 or raw != "".join(raw.split()):
+        raise InvalidTaskError(f"a task id must be short text without spaces, got {raw!r}")
+    return raw
+
+
 class ToggleAction(_ValueEnum):
     """What :meth:`WorkTracker.toggle` decided to do.
 
@@ -139,11 +156,40 @@ class Status:
     paused_seconds: int = 0
     pause_count: int = 0
     task: str | None = None
+    task_id: str | None = None
+    project: str | None = None
 
     @property
     def is_active(self) -> bool:
         """Whether a session is currently in progress."""
         return self.state is not None
+
+
+@dataclass(frozen=True)
+class DayTotal:
+    """One day's worth of work inside a :class:`Report`."""
+
+    day: date
+    worked_seconds: int
+    session_count: int
+    tasks: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Report:
+    """The work done inside one calendar period, as reported by ``report``.
+
+    ``days`` holds only the days on which something was worked, oldest first;
+    a day absent from it is a day off. Rendering lives in the CLI -- this is
+    data, not text.
+    """
+
+    period: str  # "week" or "month"
+    start: date
+    end: date  # inclusive
+    days: tuple[DayTotal, ...]
+    worked_seconds: int
+    session_count: int
 
 
 class WorkTracker:
@@ -163,7 +209,9 @@ class WorkTracker:
 
     # -- commands -----------------------------------------------------------
 
-    def start(self, task: str | None = None) -> ActiveSession:
+    def start(
+        self, task: str | None = None, task_id: str | None = None, project: str | None = None
+    ) -> ActiveSession:
         """Begin a new session, optionally naming what it is for.
 
         Args:
@@ -180,7 +228,12 @@ class WorkTracker:
             CorruptJSONError: If ``current.json`` exists but is unreadable.
             StorageError: On filesystem failure.
         """
-        session = ActiveSession.begin(self._clock(), task=checked_task(task))
+        session = ActiveSession.begin(
+            self._clock(),
+            task=checked_task(task),
+            task_id=checked_task_id(task_id),
+            project=checked_task(project),
+        )
         try:
             # Atomic create: this *is* the "fail if current.json already exists"
             # check, not a follow-up to a separate one.
@@ -259,7 +312,9 @@ class WorkTracker:
         self._storage.delete_current()
         return completed, path
 
-    def toggle(self, task: str | None = None) -> ToggleResult:
+    def toggle(
+        self, task: str | None = None, task_id: str | None = None, project: str | None = None
+    ) -> ToggleResult:
         """Advance the session by one step, whatever step the state calls for.
 
         Idle starts, running pauses, paused resumes -- the play/pause button the
@@ -291,7 +346,7 @@ class WorkTracker:
         session = self._storage.load_current()
 
         if session is None:
-            return ToggleResult(ToggleAction.STARTED, self.start(task))
+            return ToggleResult(ToggleAction.STARTED, self.start(task, task_id, project))
 
         if session.state is SessionState.RUNNING:
             return ToggleResult(ToggleAction.PAUSED, self.pause())
@@ -299,7 +354,9 @@ class WorkTracker:
         resumed, pause = self.resume()
         return ToggleResult(ToggleAction.RESUMED, resumed, pause)
 
-    def set_task(self, task: str | None) -> ActiveSession:
+    def set_task(
+        self, task: str | None, task_id: str | None = None, project: str | None = None
+    ) -> ActiveSession:
         """Write down what the running session is being spent on.
 
         Legal in either state, running or paused: what you are working on is not
@@ -318,7 +375,7 @@ class WorkTracker:
             StorageError: On filesystem failure.
         """
         session = self._require_active()
-        session.set_task(checked_task(task))
+        session.set_task(checked_task(task), checked_task_id(task_id), checked_task(project))
         self._storage.save_current(session)
         return session
 
@@ -385,6 +442,74 @@ class WorkTracker:
             paused_seconds=session.paused_seconds(moment),
             pause_count=len(session.pauses),
             task=session.task,
+            task_id=session.task_id,
+            project=session.project,
+        )
+
+    def report(self, period: str, on: date | None = None) -> Report:
+        """Total the work done in the week or month containing ``on``.
+
+        A week runs Monday to Sunday; a month is the calendar month. Sessions
+        are attributed whole to the day they *started* on, and the session in
+        progress counts too -- today's work belongs in this week's report even
+        before the day is stopped.
+
+        Args:
+            period: ``"week"`` or ``"month"``.
+            on: Any day inside the period wanted. Defaults to today, i.e. the
+                current week or month.
+
+        Returns:
+            The per-day totals and the period's overall total.
+
+        Raises:
+            ValueError: If ``period`` is neither ``"week"`` nor ``"month"``.
+            CorruptJSONError: If an archive inside the period is unreadable.
+        """
+        moment = self._clock()
+        anchor = on if on is not None else moment.date()
+
+        if period == "week":
+            start = anchor - timedelta(days=anchor.weekday())
+            end = start + timedelta(days=6)
+        elif period == "month":
+            start = anchor.replace(day=1)
+            end = anchor.replace(day=monthrange(anchor.year, anchor.month)[1])
+        else:
+            raise ValueError(f"unknown report period: {period!r}")
+
+        worked: dict[date, int] = {}
+        count: dict[date, int] = {}
+        tasks: dict[date, list[str]] = {}
+
+        def add(day: date, seconds: int, task: str | None) -> None:
+            worked[day] = worked.get(day, 0) + seconds
+            count[day] = count.get(day, 0) + 1
+            if task and task not in tasks.setdefault(day, []):
+                tasks[day].append(task)
+
+        for path in self._storage.list_sessions():
+            # An id begins with its start date, so a file outside the period
+            # is skipped by name alone, without being opened.
+            if not (str(start) <= path.stem[:10] <= str(end)):
+                continue
+            session = self._storage.load_session(path)
+            add(session.start.date(), session.worked_seconds, session.task)
+
+        current = self._storage.load_current()
+        if current is not None and start <= current.start.date() <= end:
+            add(current.start.date(), current.worked_seconds(moment), current.task)
+
+        return Report(
+            period=period,
+            start=start,
+            end=end,
+            days=tuple(
+                DayTotal(day, worked[day], count[day], tuple(tasks.get(day, ())))
+                for day in sorted(worked)
+            ),
+            worked_seconds=sum(worked.values()),
+            session_count=sum(count.values()),
         )
 
     # -- internals ----------------------------------------------------------

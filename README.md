@@ -21,6 +21,13 @@ one part of the project with third-party dependencies (React and Vite, via npm),
 and it is entirely opt-in: the tracker, the CLI and the Shortcuts never touch it,
 and everything above stays true whether you build it or not.
 
+**To start everything at once** — the widget, the web app (Today, Calendar,
+Insights) and the page in your browser:
+
+```sh
+./start.sh
+```
+
 ---
 
 ## Contents
@@ -798,6 +805,41 @@ pays for it in the common case:
   keeps the next kicks from each waiting out the connection timeout;
 * every ssh and rsync call is **hard-bounded**, so a connection that drops
   mid-flight turns into "offline, try later" in seconds, never a hang.
+
+---
+
+## Planner
+
+Tasks typed as one line of free text, parsed by Claude, and scheduled into the
+free time in your calendar. It lives in the viewer (the **Plan** section), and
+on the command line:
+
+```sh
+python3 planner.py add "finish Pecto onboarding copy, ~3h, before Thursday, deep work"
+python3 planner.py list
+python3 planner.py edit 3 priority=1 deadline=2026-10-08T18:00
+python3 planner.py start 3            # the tracker's clock, with taskId 3
+python3 planner.py stop more          # done | more | blocked
+python3 planner.py done 3 / rm 3 / replan
+```
+
+* **Parsing** is `claude -p --model haiku --json-schema` on your subscription,
+  told to guess rather than ask. In the viewer a task appears at once as
+  *parsing…* and fills in a few seconds later. A failed parse keeps your text.
+* **Scheduling** is deterministic (`planner/schedule.py`): working hours
+  (Mon–Fri 9–18) minus calendar events with a 10-minute buffer, earliest
+  deadline first, deep work into 9–12 first, splittable tasks chunked. A task
+  that cannot fit before its deadline is flagged **late**, never dropped.
+* **Apple Calendar**: busy time is read from every calendar, and the plan is
+  written to a calendar called *Planned* (created on first use), through a small
+  Swift EventKit bridge compiled on first use. macOS asks for calendar access
+  once. `PLANNER_CALENDAR=off` plans without it.
+* **The tracker stays the clock.** Start and stop go through `tracker.py`, so
+  the VM sync applies; sessions carry a `taskId`, and worked time per task is
+  read back from them.
+* **Everything is logged** to the append-only `task_events` table in
+  `planner.db`: created, parsed, scheduled, rescheduled (by you or the
+  scheduler), started, stopped (with outcome), block_done / skipped, completed.
 
 ---
 

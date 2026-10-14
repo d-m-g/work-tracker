@@ -37,8 +37,12 @@ export default function Strip({ segments, axis, edge = null, held = false, label
           <div
             key={`${segment.kind}-${segment.from}`}
             className={`strip__seg strip__seg--${segment.kind}`}
-            style={{ left: `${left}%`, width: `${Math.max(width, 0.3)}%` }}
-            title={`${segment.kind === 'work' ? 'Worked' : 'Paused'} ${clock} · ${formatDuration(
+            style={{
+              left: `${left}%`,
+              width: `${Math.max(width, 0.3)}%`,
+              ...(segment.color && { '--cal': segment.color }),
+            }}
+            title={`${segment.title ?? (segment.kind === 'work' ? 'Worked' : 'Paused')} ${clock} · ${formatDuration(
               segment.seconds,
             )}`}
           />
