@@ -50,6 +50,13 @@ export function midnightOf(ms) {
   return new Date(moment.getFullYear(), moment.getMonth(), moment.getDate()).getTime()
 }
 
+/** `2026-10-14`: the local day `ms` falls in, as the server keys halved days. */
+export function dayKey(ms) {
+  const moment = new Date(ms)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${moment.getFullYear()}-${pad(moment.getMonth() + 1)}-${pad(moment.getDate())}`
+}
+
 /**
  * The next local midnight after `ms`.
  *

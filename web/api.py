@@ -29,7 +29,7 @@ it cannot compute a duration the CLI would disagree with.
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable, Dict, List
 
 from planner.planner import Planner, PlannerError
@@ -53,7 +53,7 @@ __all__ = [
 
 #: Every command the browser is allowed to send. A name absent from this set does
 #: not reach the tracker: the UI cannot reach an operation by guessing at a URL.
-COMMANDS = frozenset({"start", "pause", "resume", "toggle", "stop", "task"})
+COMMANDS = frozenset({"start", "pause", "resume", "toggle", "stop", "task", "halve"})
 
 
 class UnknownCommandError(TrackerError):
@@ -166,6 +166,9 @@ def build_sessions_payload(storage: Storage, viewer: bool = False) -> Dict[str, 
     return {
         "sessions": sessions,
         "unreadable": unreadable,
+        # Days whose worked time counts half. The browser applies it, because the
+        # browser is what cuts sessions into days (in the viewer's own timezone).
+        "halved": storage.load_halved(),
         "totals": {
             "count": len(sessions),
             "workedSeconds": sum(item["workedSeconds"] for item in sessions),
@@ -251,6 +254,17 @@ def run_command(
             result["session"] = tracker.set_archived_task(session_id, _task_of(body)).to_dict()
         else:
             raise InvalidTaskError(f"a session id must be text, got {type(session_id).__name__}")
+    elif command == "halve":
+        day = body.get("day")
+        try:
+            # Round-tripping rejects the other spellings fromisoformat accepts
+            # (20261014, 2026-W42-3), so one day has exactly one key.
+            valid = date.fromisoformat(day).isoformat() == day
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise InvalidTaskError(f"a day must be YYYY-MM-DD, got {day!r}")
+        result["halved"] = storage.set_halved(day, bool(body.get("halved", True)))
 
     result["status"] = build_status_payload(storage, clock=clock)
     return result

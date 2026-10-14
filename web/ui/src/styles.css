@@ -2244,6 +2244,18 @@ html::before {
   font-size: 0.95rem;
 }
 
+.day__half {
+  font-family: var(--face-label);
+  font-size: 0.75rem;
+}
+
+.day__halve {
+  display: block;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 .day__strip {
   display: block;
   padding-right: 1rem;

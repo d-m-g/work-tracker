@@ -8,7 +8,7 @@ import Planner from './components/Planner.jsx'
 import Reports from './components/Reports.jsx'
 import WidgetPortrait from './components/WidgetPortrait.jsx'
 import { isDemo, useDemoTracker } from './lib/demo.js'
-import { axisFor, daysOf, spillOf, todayOf } from './lib/timeline.js'
+import { axisFor, dayKey, daysOf, spanOf, spillOf, todayOf } from './lib/timeline.js'
 import { useTracker } from './lib/useTracker.js'
 
 /**
@@ -92,10 +92,29 @@ function Viewer({ tracker, demo = false }) {
   // it so each day counts only its own hours. The spill is merged in here rather
   // than bolted on afterwards, so a night that holds both an archived session and
   // the live one's small hours comes out as one day, like any other.
+  //
+  // A day you have checked as halved counts half its worked time, here, once, so
+  // the row, the reports and the total below all agree. `fullSeconds` keeps what
+  // was actually tracked.
+  const halved = useMemo(() => new Set(sessions?.halved ?? []), [sessions])
   const days = useMemo(() => {
     if (!sessions) return null
-    return daysOf(spill ? [...sessions.sessions, spill] : sessions.sessions)
-  }, [sessions, spill])
+    return daysOf(spill ? [...sessions.sessions, spill] : sessions.sessions).map((day) =>
+      halved.has(dayKey(day.at))
+        ? { ...day, halved: true, fullSeconds: day.workedSeconds, workedSeconds: Math.round(day.workedSeconds / 2) }
+        : day,
+    )
+  }, [sessions, spill, halved])
+
+  // The live session's today, halved too when today is checked — what Reports
+  // adds on top of the archive. The live card itself still shows the real clock.
+  const todayCounted = useMemo(
+    () =>
+      today && live && halved.has(dayKey(spanOf(live).end))
+        ? { ...today, workedSeconds: Math.round(today.workedSeconds / 2) }
+        : today,
+    [today, live, halved],
+  )
 
   // The archive's total, plus whatever the live session has already put behind a
   // midnight — because that is now a row on the page, and a total that heads a
@@ -104,12 +123,11 @@ function Viewer({ tracker, demo = false }) {
   // contributes is the part of it that is no longer today.
   const totals = useMemo(() => {
     const archived = sessions?.totals ?? { count: 0, workedSeconds: 0, pausedSeconds: 0 }
-    if (!spill || !today) return archived
-    return {
-      ...archived,
-      workedSeconds: archived.workedSeconds + (live.workedSeconds - today.workedSeconds),
-    }
-  }, [sessions, spill, today, live])
+    const spilled = spill && today ? live.workedSeconds - today.workedSeconds : 0
+    const removed = (days ?? []).reduce((sum, day) => sum + (day.halved ? day.fullSeconds - day.workedSeconds : 0), 0)
+    if (!spilled && !removed) return archived
+    return { ...archived, workedSeconds: archived.workedSeconds + spilled - removed }
+  }, [sessions, spill, today, live, days])
 
   return (
     <main className={`page ${calendarPage ? 'page--wide page--fill' : ''}`}>
@@ -192,7 +210,7 @@ function Viewer({ tracker, demo = false }) {
               it lives on the server's disk, so the demo has none to show either. */}
           {!demo && !readOnly && <Planner status={status} axis={AXIS} />}
 
-          <Reports days={days} live={live} today={today} />
+          <Reports days={days} live={live} today={todayCounted} />
 
           <History
             days={days}
@@ -201,6 +219,7 @@ function Viewer({ tracker, demo = false }) {
             axis={AXIS}
             send={send}
             readOnly={readOnly}
+            canHalve={!readOnly && !demo}
           />
         </>
       )}

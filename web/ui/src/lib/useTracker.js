@@ -130,8 +130,9 @@ export function useTracker() {
         setStatus(result.status)
         previousId.current = result.status.id
         // A stop archives a day; a task edit can rewrite one that is already
-        // archived. Either way the history on screen is now out of date.
-        if (result.session) loadSessions()
+        // archived. Either way the history on screen is now out of date. So does
+        // halving a day.
+        if (result.session || result.halved) loadSessions()
         return true
       } catch (err) {
         setRefusal(err.message)

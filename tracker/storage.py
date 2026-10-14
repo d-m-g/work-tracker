@@ -64,6 +64,36 @@ class Storage:
         """Directory holding the archived sessions."""
         return self._root / "sessions"
 
+    @property
+    def halved_path(self) -> Path:
+        """The days whose worked time counts half, as ``YYYY-MM-DD`` strings."""
+        return self._root / "halved.json"
+
+    def load_halved(self) -> list[str]:
+        """The halved days, sorted. None yet is an empty list, not an error."""
+        try:
+            return sorted(read_json(self.halved_path))
+        except FileNotFoundError:
+            return []
+
+    def set_halved(self, day: str, halved: bool) -> list[str]:
+        """Mark or unmark one day as halved, and return the new list.
+
+        Raises:
+            StorageError: If the file cannot be written.
+        """
+        # ponytail: read-modify-write with no lock; two clicks racing could drop one.
+        days = set(self.load_halved())
+        if halved:
+            days.add(day)
+        else:
+            days.discard(day)
+        try:
+            atomic_write_json(self.halved_path, sorted(days))
+        except OSError as exc:
+            raise StorageError(f"cannot write {self.halved_path}: {exc}") from exc
+        return sorted(days)
+
     def session_path(self, session_id: str) -> Path:
         """Path of the archive file for ``session_id``.
 

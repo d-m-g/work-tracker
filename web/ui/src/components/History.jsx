@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { formatCompact, formatDate, formatDuration, formatTime } from '../lib/format.js'
+import { dayKey } from '../lib/timeline.js'
 import Num from './Num.jsx'
 import Strip, { Ruler } from './Strip.jsx'
 import TaskField from './TaskField.jsx'
@@ -16,7 +17,7 @@ import TaskField from './TaskField.jsx'
  * the kind you might want to name, and a row you cannot open is a row you cannot
  * correct.
  */
-function Day({ day, axis, index, send, readOnly }) {
+function Day({ day, axis, index, send, readOnly, canHalve }) {
   const [open, setOpen] = useState(false)
 
   // Latest first, the way the days themselves are stacked. `daysOf` hands these
@@ -45,8 +46,9 @@ function Day({ day, axis, index, send, readOnly }) {
             {tasksOf(day) || 'no task'}
           </span>
         </span>
-        <span className="day__worked">
+        <span className="day__worked" title={day.halved ? `halved from ${formatDuration(day.fullSeconds)}` : undefined}>
           <Num>{formatDuration(day.workedSeconds)}</Num>
+          {day.halved && <span className="day__half"> ½</span>}
         </span>
         <span className="day__strip">
           <Strip segments={day.segments} axis={axis} label={describe(day)} />
@@ -58,6 +60,19 @@ function Day({ day, axis, index, send, readOnly }) {
 
       {open && (
         <div className="day__open">
+          {/* Counts the day at half: the row, the reports and the total all follow.
+              The sessions themselves are untouched, so unchecking restores it. */}
+          {canHalve && (
+            <label className="day__halve">
+              <input
+                type="checkbox"
+                checked={!!day.halved}
+                onChange={(event) => send('halve', { day: dayKey(day.at), halved: event.target.checked })}
+              />{' '}
+              Count this day at half
+              {day.halved && <span className="dim"> · {formatDuration(day.fullSeconds)} tracked</span>}
+            </label>
+          )}
           {/* Both lists are stamped, because they are two different things and
               nothing else tells them apart: a session is a stretch you tracked, a
               break is a hole you punched in one. Unlabelled, the breaks read as
@@ -148,7 +163,7 @@ function describe(day) {
   }, ${day.breaks} ${day.breaks === 1 ? 'break' : 'breaks'}.`
 }
 
-export default function History({ days, totals, unreadable, axis, send, readOnly = false }) {
+export default function History({ days, totals, unreadable, axis, send, readOnly = false, canHalve = false }) {
   if (!days) return null
 
   return (
@@ -195,6 +210,7 @@ export default function History({ days, totals, unreadable, axis, send, readOnly
                 index={index}
                 send={send}
                 readOnly={readOnly}
+                canHalve={canHalve}
               />
             ))}
           </ul>
