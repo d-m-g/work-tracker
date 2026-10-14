@@ -1,0 +1,10 @@
+.git
+.secrets
+**/node_modules
+**/__pycache__
+web/ui/dist
+widget
+sessions
+current.json
+.password*
+.session_secret
