@@ -593,6 +593,59 @@ html::before {
   opacity: 0.55;
 }
 
+/* ---------- reports ---------- */
+
+.reports {
+  margin-bottom: 3.5rem;
+}
+
+.reports__cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+  align-items: start;
+}
+
+.report__title {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.report__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.report__rows li {
+  display: grid;
+  grid-template-columns: 1fr auto 4.5rem;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+}
+
+.report__label {
+  font-size: 0.85rem;
+}
+
+.report__worked {
+  font-family: var(--face-data);
+  font-kerning: none;
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+/* Words about the number beside it ("13 days"), in the label voice like
+   .day__breaks — not a second measurement. */
+.report__days {
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-align: right;
+}
+
 /* ---------- history ---------- */
 
 .history__head {
@@ -1089,6 +1142,12 @@ html::before {
 /* ---------- narrow ---------- */
 
 @media (max-width: 40rem) {
+  /* Two lists side by side have no room on a phone; they stack instead. */
+  .reports__cols {
+    grid-template-columns: 1fr;
+    gap: 1.75rem;
+  }
+
   /* The wash is one composition, and it was composed for a page a thousand pixels
      across: six soft blobs spread over a 3:2 field. At `80%` of a phone that whole
      field collapses into a smudge the size of a business card, floating in the

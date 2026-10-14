@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import History from './components/History.jsx'
 import LiveSession from './components/LiveSession.jsx'
+import Reports from './components/Reports.jsx'
 import WidgetPortrait from './components/WidgetPortrait.jsx'
 import { isDemo, useDemoTracker } from './lib/demo.js'
 import { axisFor, daysOf, spillOf, todayOf } from './lib/timeline.js'
@@ -154,6 +155,8 @@ function Viewer({ tracker, demo = false }) {
           inches away on your own screen, and a picture of it would be a picture of
           something you are already looking at. */}
       {demo && <WidgetPortrait status={status} />}
+
+      <Reports days={days} live={live} today={today} />
 
       <History
         days={days}
