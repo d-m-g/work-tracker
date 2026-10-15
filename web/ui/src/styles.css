@@ -2106,6 +2106,85 @@ html::before {
   text-align: right;
 }
 
+.report__make {
+  margin-left: 0.6rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.report__make:hover,
+.report__make[aria-pressed='true'] {
+  opacity: 1;
+}
+
+.month-report {
+  margin-top: 2rem;
+  padding: 1.25rem;
+  border: 1px solid var(--rule);
+}
+
+.month-report__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.month-report__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1rem;
+  margin: 0 0 1.25rem;
+}
+
+.month-report__summary dt {
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+}
+
+.month-report__summary dd {
+  margin: 0.2rem 0 0;
+  font-family: var(--face-data);
+}
+
+.month-report__days {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.month-report__days th {
+  font-family: var(--face-label);
+  font-size: 0.7rem;
+  font-weight: normal;
+  letter-spacing: 0.06em;
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+}
+
+.month-report__days td,
+.month-report__days th {
+  padding: 0.3rem 0.5rem 0.3rem 0;
+}
+
+.month-report__days td:nth-child(2),
+.month-report__days td:nth-child(3) {
+  font-family: var(--face-data);
+}
+
 /* ---------- history ---------- */
 
 .history__head {

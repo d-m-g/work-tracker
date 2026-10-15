@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { formatCompact } from '../lib/format.js'
+import { useMemo, useState } from 'react'
+import { formatCompact, formatDate } from '../lib/format.js'
 import { midnightOf, spanOf } from '../lib/timeline.js'
 import Num from './Num.jsx'
 
@@ -45,14 +45,26 @@ function group(dayTotals, keyOf) {
   return [...periods.values()].sort((a, b) => b.at - a.at)
 }
 
-function Periods({ title, rows, label }) {
+function Periods({ title, rows, label, onReport, picked }) {
   return (
     <div className="report">
       <p className="eyebrow report__title">{title}</p>
       <ol className="report__rows">
         {rows.map((row) => (
           <li key={row.at}>
-            <span className="report__label">{label(row.at)}</span>
+            <span className="report__label">
+              {label(row.at)}
+              {onReport && (
+                <button
+                  type="button"
+                  className="report__make"
+                  aria-pressed={picked === row.at}
+                  onClick={() => onReport(picked === row.at ? null : row.at)}
+                >
+                  {PROJECT} report
+                </button>
+              )}
+            </span>
             <span className="report__worked">
               <Num>{formatCompact(row.workedSeconds)}</Num>
             </span>
@@ -62,6 +74,116 @@ function Periods({ title, rows, label }) {
           </li>
         ))}
       </ol>
+    </div>
+  )
+}
+
+/** The client's project. Unassigned sessions count as theirs, as in web/api.py. */
+const PROJECT = 'Pecto'
+const isProject = (session) =>
+  session.project == null || String(session.project).toLowerCase() === PROJECT.toLowerCase()
+
+/** `12.50 h`: decimal hours, the unit an invoice is written in. */
+const hours = (seconds) => `${(seconds / 3600).toFixed(2)} h`
+
+/**
+ * One month of Pecto's hours, day by day: what was tracked, what counts after
+ * halving, and the difference. Archived days only — the session running now
+ * joins once it is stopped.
+ */
+function MonthReport({ days, month, onClose }) {
+  const rows = (days ?? [])
+    .filter((day) => monthOf(day.at) === month)
+    .map((day) => {
+      const tracked = day.parts
+        .filter((part) => isProject(part.session))
+        .reduce((sum, part) => sum + part.workedSeconds, 0)
+      return { at: day.at, tracked, halved: !!day.halved, counted: day.halved ? Math.round(tracked / 2) : tracked }
+    })
+    .filter((row) => row.tracked > 0)
+    .sort((a, b) => a.at - b.at)
+
+  const sum = (list, key) => list.reduce((total, row) => total + row[key], 0)
+  const halvedRows = rows.filter((row) => row.halved)
+  const tracked = sum(rows, 'tracked')
+  const counted = sum(rows, 'counted')
+  const halvedTracked = sum(halvedRows, 'tracked')
+  const halvedCounted = sum(halvedRows, 'counted')
+
+  const summary = [
+    ['Days worked', String(rows.length)],
+    ['Hours tracked', hours(tracked)],
+    [`Halved days (${halvedRows.length})`, `${hours(halvedTracked)} → ${hours(halvedCounted)}`],
+    ['Hours removed by halving', hours(tracked - counted)],
+    ['Hours counted', hours(counted)],
+  ]
+
+  const title = `${PROJECT} — ${monthLabel(month)}`
+  const text = [
+    title,
+    '',
+    ...summary.map(([name, value]) => `${name}: ${value}`),
+    '',
+    ...rows.map(
+      (row) =>
+        `${formatDate(row.at)}\t${hours(row.tracked)}\t${hours(row.counted)}${row.halved ? '\t(halved)' : ''}`,
+    ),
+  ].join('\n')
+
+  return (
+    <div className="month-report">
+      <header className="month-report__head">
+        <p className="eyebrow">{title}</p>
+        <span>
+          <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(text)}>
+            Copy
+          </button>{' '}
+          <button type="button" className="btn" onClick={onClose}>
+            Close
+          </button>
+        </span>
+      </header>
+
+      {rows.length === 0 ? (
+        <p className="dim">No {PROJECT} hours this month.</p>
+      ) : (
+        <>
+          <dl className="month-report__summary">
+            {summary.map(([name, value]) => (
+              <div key={name}>
+                <dt className="dim">{name}</dt>
+                <dd>
+                  <Num>{value}</Num>
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <table className="month-report__days">
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>Tracked</th>
+                <th>Counted</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.at}>
+                  <td>{formatDate(row.at)}</td>
+                  <td>
+                    <Num>{hours(row.tracked)}</Num>
+                  </td>
+                  <td>
+                    <Num>{hours(row.counted)}</Num>
+                  </td>
+                  <td className="dim">{row.halved ? '½' : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
     </div>
   )
 }
@@ -97,6 +219,7 @@ export default function Reports({ days, live, today }) {
 
   const weeks = useMemo(() => group(dayTotals, weekOf), [dayTotals])
   const months = useMemo(() => group(dayTotals, monthOf), [dayTotals])
+  const [picked, setPicked] = useState(null)
 
   if (dayTotals.length === 0) return null
 
@@ -107,8 +230,9 @@ export default function Reports({ days, live, today }) {
       </header>
       <div className="reports__cols">
         <Periods title="Weeks" rows={weeks} label={weekLabel} />
-        <Periods title="Months" rows={months} label={monthLabel} />
+        <Periods title="Months" rows={months} label={monthLabel} onReport={setPicked} picked={picked} />
       </div>
+      {picked !== null && <MonthReport days={days} month={picked} onClose={() => setPicked(null)} />}
     </section>
   )
 }
