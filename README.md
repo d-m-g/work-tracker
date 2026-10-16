@@ -834,6 +834,14 @@ python3 planner.py done 3 / rm 3 / replan
   written to a calendar called *Planned* (created on first use), through a small
   Swift EventKit bridge compiled on first use. macOS asks for calendar access
   once. `PLANNER_CALENDAR=off` plans without it.
+* **iCloud over CalDAV** (the VM, or any server that is not a Mac): set
+  `PLANNER_CALDAV_USER` to your Apple ID and `PLANNER_CALDAV_PASSWORD_FILE` to a
+  file holding an *app-specific* password (appleid.apple.com → Sign-In and
+  Security → App-Specific Passwords). Busy time comes from every iCloud calendar
+  and the plan goes to the same *Planned* calendars, so the iPhone shows it.
+  `PLANNER_CALDAV_URL` points it at another CalDAV server. When set, it wins over
+  EventKit. Run only one planner against a calendar: two would keep rewriting
+  each other's *Planned* blocks.
 * **The tracker stays the clock.** Start and stop go through `tracker.py`, so
   the VM sync applies; sessions carry a `taskId`, and worked time per task is
   read back from them.

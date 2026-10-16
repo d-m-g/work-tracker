@@ -299,7 +299,11 @@ class Planner:
         if calendar == "auto":
             calendar = None
             wanted = os.environ.get("PLANNER_CALENDAR", "on") != "off"
-            if wanted and sys.platform == "darwin" and shutil.which("swiftc"):
+            if wanted and os.environ.get("PLANNER_CALDAV_USER"):
+                # iCloud over CalDAV: the server's way in, where EventKit is not.
+                from .caldav import from_env
+                calendar = from_env()
+            elif wanted and sys.platform == "darwin" and shutil.which("swiftc"):
                 from .eventkit import AppleCalendar
                 calendar = AppleCalendar(root / ".planner-build")
         self.calendar = calendar
@@ -672,7 +676,7 @@ class Planner:
     def edit_event(self, raw: Any) -> None:
         """Change one occurrence of an Apple Calendar event, then replan around it."""
         if self.calendar is None:
-            raise PlannerError("Apple Calendar is not available on this server")
+            raise PlannerError("no calendar is connected on this server")
         if not isinstance(raw, dict) or not raw.get("id") or not raw.get("occurrence"):
             raise PlannerError("name the event by its id and occurrence")
         change = {"id": str(raw["id"]), "occurrence": _utc(_aware(raw["occurrence"], "occurrence"))}
