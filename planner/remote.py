@@ -32,7 +32,7 @@ from .planner import Planner, PlannerError
 METHODS = frozenset({
     "payload", "stats", "replan", "add", "edit", "done", "delete", "start", "stop", "start_new",
     "set_hours", "pin", "unpin", "retime_work", "edit_event", "link", "calendar_payload",
-    "raw_text", "parsed", "review_figures", "save_review",
+    "raw_text", "parsed", "review_figures", "save_review", "save_summary",
 })
 
 #: How the VM runs its planner: inside the viewer's container, on its data.

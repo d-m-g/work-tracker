@@ -2156,6 +2156,13 @@ html::before {
   margin: 0 0 1.25rem;
 }
 
+/* Claude's bullets, newlines and all. */
+.month-report__done {
+  white-space: pre-wrap;
+  margin: 0 0 1.25rem;
+  line-height: 1.5;
+}
+
 .month-report__summary dt {
   font-family: var(--face-label);
   font-size: 0.7rem;

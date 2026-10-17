@@ -27,6 +27,12 @@ function weekLabel(at) {
   return `${start.toLocaleDateString([], opts)} – ${end.toLocaleDateString([], opts)}`
 }
 
+/** `2026-07`: the key `planner.py summarize` stores a month's summary under. */
+function monthKey(at) {
+  const day = new Date(at)
+  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}`
+}
+
 /** `July 2026`. */
 function monthLabel(at) {
   return new Date(at).toLocaleDateString([], { month: 'long', year: 'numeric' })
@@ -90,7 +96,7 @@ const hours = (seconds) => `${(seconds / 3600).toFixed(2)} h`
  * halving, and the difference. Archived days only — the session running now
  * joins once it is stopped.
  */
-function MonthReport({ days, month, onClose }) {
+function MonthReport({ days, month, summary: done, onClose }) {
   // It opens below both lists, and the weeks run far longer than the months:
   // without this the button appears to do nothing.
   const panel = useRef(null)
@@ -130,6 +136,7 @@ function MonthReport({ days, month, onClose }) {
     '',
     ...summary.map(([name, value]) => `${name}: ${value}`),
     '',
+    ...(done ? [done, ''] : []),
     ...rows.map(
       (row) =>
         `${formatDate(row.at)}\t${hours(row.tracked)}\t${hours(row.counted)}${row.halved ? '\t(halved)' : ''}`,
@@ -164,6 +171,7 @@ function MonthReport({ days, month, onClose }) {
               </div>
             ))}
           </dl>
+          {done && <p className="month-report__done">{done}</p>}
           <table className="month-report__days">
             <thead>
               <tr>
@@ -203,7 +211,7 @@ function MonthReport({ days, month, onClose }) {
  * days as the rows below show them. The live session's hours count too, on the
  * day (and so the week, and the month) they are landing in right now.
  */
-export default function Reports({ days, live, today }) {
+export default function Reports({ days, live, today, summaries }) {
   const dayTotals = useMemo(() => {
     const totals = new Map()
     for (const day of days ?? []) {
@@ -238,7 +246,9 @@ export default function Reports({ days, live, today }) {
         <Periods title="Weeks" rows={weeks} label={weekLabel} />
         <Periods title="Months" rows={months} label={monthLabel} onReport={setPicked} picked={picked} />
       </div>
-      {picked !== null && <MonthReport days={days} month={picked} onClose={() => setPicked(null)} />}
+      {picked !== null && (
+        <MonthReport days={days} month={picked} summary={summaries?.[monthKey(picked)]} onClose={() => setPicked(null)} />
+      )}
     </section>
   )
 }

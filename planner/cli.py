@@ -75,8 +75,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         "text", nargs="+")
     commands.add_parser("parse", help="(internal) parse a task's text").add_argument("id", type=int)
     commands.add_parser("rpc", help="(internal) one JSON call from another machine's planner")
+    summarize = commands.add_parser("summarize", help="write what was done for Pecto in a month")
+    summarize.add_argument("month", metavar="YYYY-MM")
+    summarize.add_argument("--chat", default="Pecto", help="Telegram chat name ('' to skip)")
+    summarize.add_argument("--repo", type=Path, action="append", help="default: every repo in ~/_WORK_PROG/PECTO")
     args = parser.parse_args(argv)
     root = args.root or default_root()
+
+    if args.command == "summarize":
+        from .parse import ParseError
+        from .summary import summarize as write_summary
+        try:
+            text = write_summary(root, args.month, args.chat or None, paths=args.repo)
+            open_planner(root).save_summary(args.month, text)
+        except (ParseError, TrackerError, ValueError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(text)
+        return 0
 
     if args.command == "rpc":
         from .remote import serve_rpc

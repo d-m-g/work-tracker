@@ -172,6 +172,8 @@ def build_sessions_payload(storage: Storage, viewer: bool = False) -> Dict[str, 
         # Days whose worked time counts half. The browser applies it, because the
         # browser is what cuts sessions into days (in the viewer's own timezone).
         "halved": storage.load_halved(),
+        # What was done each month, written by `planner.py summarize` on the Mac.
+        "summaries": storage.load_summaries(),
         "totals": {
             "count": len(sessions),
             "workedSeconds": sum(item["workedSeconds"] for item in sessions),

@@ -210,7 +210,7 @@ function Viewer({ tracker, demo = false }) {
               it lives on the server's disk, so the demo has none to show either. */}
           {!demo && !readOnly && <Planner status={status} axis={AXIS} />}
 
-          <Reports days={days} live={live} today={todayCounted} />
+          <Reports days={days} live={live} today={todayCounted} summaries={sessions?.summaries} />
 
           <History
             days={days}

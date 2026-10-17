@@ -1,0 +1,162 @@
+"""What was done for Pecto in a month, in words -- for the month report.
+
+Runs on the Mac, where the repos, the Telegram login and ``claude`` are:
+
+    uv run --with telethon python3 planner.py summarize 2026-10
+
+Per day it gathers the Pecto sessions' notes, your commits in the Pecto repos and
+the Pecto group's messages, asks Claude for a short account, and stores only that
+account (on the VM, through the planner). The raw messages are never stored.
+
+Telegram needs ``.secrets/telegram.json`` -- ``{"api_id": 123, "api_hash": "..."}``
+from my.telegram.org -- and one interactive login, which leaves
+``.secrets/telegram.session``. That file is your whole account: it stays here.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from collections import defaultdict
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from tracker.storage import Storage
+from tracker.utils import TrackerError
+
+from .parse import CLAUDE, ParseError
+
+PROJECT = "pecto"
+PECTO_DIR = Path.home() / "_WORK_PROG" / "PECTO"
+#: Matches both of your git identities (Gorovoi, Gorovoy) and nobody else's.
+AUTHOR = "Gorovo"
+#: ponytail: a busy month is cut here rather than chunked; chunk by week if it bites.
+MAX_CHARS = 120_000
+
+Days = Dict[date, List[str]]
+
+PROMPT = """You write the monthly work summary a contractor sends their client, Pecto.
+You get, per day: the hours tracked and the notes on those work sessions, the
+contractor's git commits, and messages from the Pecto group chat. Write in English:
+one short line on the month as a whole, then one bullet per day worked, saying
+what was done that day in plain words a non-engineer understands. Use the chat
+only to understand the work -- never quote it, never name people other than the
+contractor, never mention anything private. Do not invent work the inputs do not
+show; a day with only hours and no detail gets "general work" rather than a guess.
+Output plain text, no headings, no markdown other than "- " bullets."""
+
+
+def month_bounds(month: str) -> Tuple[datetime, datetime]:
+    """The local midnight the month starts on, and the one it ends on."""
+    first = datetime.strptime(month, "%Y-%m").astimezone()
+    following = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return first, following.astimezone()
+
+
+def sessions_by_day(root: Path, start: datetime, end: datetime) -> Days:
+    """Pecto's sessions (and the unassigned ones, as the report counts them)."""
+    storage = Storage(root)
+    days: Days = defaultdict(list)
+    for path in storage.list_sessions():
+        try:
+            session = storage.load_session(path)
+        except TrackerError:
+            continue
+        if not (start <= session.start < end):
+            continue
+        if session.project is not None and session.project.lower() != PROJECT:
+            continue
+        hours = session.worked_seconds / 3600
+        days[session.start.astimezone().date()].append(f"{hours:.2f} h: {session.task or '(no note)'}")
+    return days
+
+
+def repos(base: Path = PECTO_DIR) -> List[Path]:
+    """Every git repo up to three levels under ``base``."""
+    return sorted({git.parent for depth in ("*/.git", "*/*/.git", "*/*/*/.git") for git in base.glob(depth)})
+
+
+def commits_by_day(paths: Iterable[Path], author: str, start: datetime, end: datetime) -> Days:
+    days: Days = defaultdict(list)
+    seen = set()
+    for repo in paths:
+        done = subprocess.run(
+            ["git", "-C", str(repo), "log", "--all", "--no-merges", f"--author={author}",
+             f"--since={start.isoformat()}", f"--until={end.isoformat()}", "--format=%aI%x09%s"],
+            capture_output=True, text=True, timeout=60)
+        for line in done.stdout.splitlines():
+            stamp, _, subject = line.partition("\t")
+            day = datetime.fromisoformat(stamp).astimezone().date()
+            if (day, subject) not in seen:  # a clone of a repo repeats its commits
+                seen.add((day, subject))
+                days[day].append(f"{repo.name}: {subject}")
+    return days
+
+
+def telegram_by_day(chat: str, start: datetime, end: datetime, secrets: Path) -> Days:
+    """The messages of the one chat whose name contains ``chat``, in the window."""
+    try:
+        from telethon.sync import TelegramClient
+    except ImportError:
+        raise ParseError("Telegram needs telethon: run this as "
+                         "`uv run --with telethon python3 planner.py summarize ...`") from None
+    try:
+        keys = json.loads((secrets / "telegram.json").read_text())
+    except (OSError, ValueError) as exc:
+        raise ParseError(f"Telegram needs {secrets / 'telegram.json'} with api_id and api_hash: {exc}") from exc
+
+    days: Days = defaultdict(list)
+    # The first run asks for your phone number and the code Telegram sends you.
+    with TelegramClient(str(secrets / "telegram"), int(keys["api_id"]), keys["api_hash"]) as client:
+        found = [d for d in client.iter_dialogs() if chat.lower() in (d.name or "").lower()]
+        exact = [d for d in found if d.name.lower() == chat.lower()]
+        if len(exact or found) != 1:
+            names = ", ".join(repr(d.name) for d in found) or "none"
+            raise ParseError(f"need exactly one Telegram chat matching {chat!r}; found {names}")
+        for message in client.iter_messages((exact or found)[0], offset_date=start, reverse=True):
+            if message.date >= end:
+                break
+            if message.text:
+                sender = message.sender
+                name = getattr(sender, "first_name", None) or getattr(sender, "title", None) or "?"
+                days[message.date.astimezone().date()].append(f"{name}: {message.text[:500]}")
+    return days
+
+
+def digest(sessions: Days, commits: Days, chat: Days) -> str:
+    """Everything, day by day, as Claude reads it."""
+    out = []
+    for day in sorted(set(sessions) | set(commits) | set(chat)):
+        out.append(f"## {day.isoformat()} ({day:%A})")
+        for title, lines in (("Tracked", sessions), ("Commits", commits), ("Chat", chat)):
+            if lines.get(day):
+                out.append(f"{title}:")
+                out.extend(f"- {line}" for line in lines[day])
+        out.append("")
+    return "\n".join(out)[:MAX_CHARS]
+
+
+def write(text: str) -> str:
+    command = [CLAUDE, "-p", text, "--model", "sonnet", "--output-format", "json",
+               "--no-session-persistence", "--tools", "", "--system-prompt", PROMPT]
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=300,
+                              stdin=subprocess.DEVNULL)
+        answer = json.loads(done.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        raise ParseError(str(exc)) from exc
+    if answer.get("is_error") or not answer.get("result"):
+        raise ParseError(answer.get("result") or done.stderr.strip() or "no answer")
+    return str(answer["result"]).strip()
+
+
+def summarize(root: Path, month: str, chat: Optional[str], author: str = AUTHOR,
+              paths: Optional[List[Path]] = None) -> str:
+    start, end = month_bounds(month)
+    sessions = sessions_by_day(root, start, end)
+    commits = commits_by_day(paths if paths is not None else repos(), author, start, end)
+    messages = telegram_by_day(chat, start, end, root / ".secrets") if chat else {}
+    if not (sessions or commits):
+        raise ParseError(f"nothing tracked or committed for Pecto in {month}")
+    return write(digest(sessions, commits, messages))

@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 from calendar import monthrange
 import shutil
 import sqlite3
@@ -536,6 +537,12 @@ class Planner:
     def save_review(self, text: str) -> Dict[str, Any]:
         with self.db:
             return self._meta("review", {"at": self.clock().isoformat(), "text": str(text)})
+
+    def save_summary(self, month: str, text: str) -> None:
+        """Store what was done in ``month`` (YYYY-MM), for the month report."""
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(month)):
+            raise PlannerError(f"not a month: {month!r}")
+        Storage(self.root).set_summary(month, str(text))
 
     def raw_text(self, task_id: Any) -> str:
         """The words a task was typed in, for parsing."""

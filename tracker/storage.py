@@ -94,6 +94,31 @@ class Storage:
             raise StorageError(f"cannot write {self.halved_path}: {exc}") from exc
         return sorted(days)
 
+    @property
+    def summaries_path(self) -> Path:
+        """What was done each month, in words: ``{"YYYY-MM": text}``."""
+        return self._root / "summaries.json"
+
+    def load_summaries(self) -> dict[str, str]:
+        try:
+            return dict(read_json(self.summaries_path))
+        except FileNotFoundError:
+            return {}
+
+    def set_summary(self, month: str, text: str) -> dict[str, str]:
+        """Store one month's summary, replacing any earlier one.
+
+        Raises:
+            StorageError: If the file cannot be written.
+        """
+        summaries = self.load_summaries()
+        summaries[month] = text
+        try:
+            atomic_write_json(self.summaries_path, summaries)
+        except OSError as exc:
+            raise StorageError(f"cannot write {self.summaries_path}: {exc}") from exc
+        return summaries
+
     def session_path(self, session_id: str) -> Path:
         """Path of the archive file for ``session_id``.
 

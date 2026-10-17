@@ -843,6 +843,15 @@ python3 planner.py done 3 / rm 3 / replan
   `PLANNER_CALDAV_URL` points it at another CalDAV server. When set, it wins over
   EventKit. Run only one planner against a calendar: two would keep rewriting
   each other's *Planned* blocks.
+* **What was done each month**, for the Pecto month report:
+  `uv run --with telethon python3 planner.py summarize 2026-10` on the Mac reads
+  that month's Pecto sessions, your commits in the repos under
+  `~/_WORK_PROG/PECTO` (`--repo` to choose) and the Pecto Telegram group
+  (`--chat NAME`, `--chat ''` to skip), and asks Claude for a day-by-day account.
+  Only that account is stored, on the VM, in `summaries.json`. Telegram needs
+  `.secrets/telegram.json` (`{"api_id": …, "api_hash": "…"}` from
+  my.telegram.org); the first run asks for your phone number and login code and
+  leaves `.secrets/telegram.session`, which is your whole account: keep it there.
 * **The tracker stays the clock.** Start and stop go through `tracker.py`, so
   the VM sync applies; sessions carry a `taskId`, and worked time per task is
   read back from them.
