@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatCompact, formatDate } from '../lib/format.js'
 import { midnightOf, spanOf } from '../lib/timeline.js'
 import Num from './Num.jsx'
@@ -49,22 +49,21 @@ function Periods({ title, rows, label, onReport, picked }) {
   return (
     <div className="report">
       <p className="eyebrow report__title">{title}</p>
-      <ol className="report__rows">
+      <ol className={`report__rows ${onReport ? 'report__rows--action' : ''}`}>
         {rows.map((row) => (
           <li key={row.at}>
-            <span className="report__label">
-              {label(row.at)}
-              {onReport && (
-                <button
-                  type="button"
-                  className="report__make"
-                  aria-pressed={picked === row.at}
-                  onClick={() => onReport(picked === row.at ? null : row.at)}
-                >
-                  {PROJECT} report
-                </button>
-              )}
-            </span>
+            <span className="report__label">{label(row.at)}</span>
+            {onReport && (
+              <button
+                type="button"
+                className="report__make"
+                aria-pressed={picked === row.at}
+                aria-label={`${PROJECT} report for ${label(row.at)}`}
+                onClick={() => onReport(picked === row.at ? null : row.at)}
+              >
+                Report
+              </button>
+            )}
             <span className="report__worked">
               <Num>{formatCompact(row.workedSeconds)}</Num>
             </span>
@@ -92,6 +91,13 @@ const hours = (seconds) => `${(seconds / 3600).toFixed(2)} h`
  * joins once it is stopped.
  */
 function MonthReport({ days, month, onClose }) {
+  // It opens below both lists, and the weeks run far longer than the months:
+  // without this the button appears to do nothing.
+  const panel = useRef(null)
+  useEffect(() => {
+    panel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [month])
+
   const rows = (days ?? [])
     .filter((day) => monthOf(day.at) === month)
     .map((day) => {
@@ -131,7 +137,7 @@ function MonthReport({ days, month, onClose }) {
   ].join('\n')
 
   return (
-    <div className="month-report">
+    <div className="month-report" ref={panel}>
       <header className="month-report__head">
         <p className="eyebrow">{title}</p>
         <span>

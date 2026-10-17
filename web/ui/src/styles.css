@@ -2106,8 +2106,15 @@ html::before {
   text-align: right;
 }
 
+.report__rows--action li {
+  grid-template-columns: 1fr auto auto 4.5rem;
+}
+
+.report__label {
+  white-space: nowrap;
+}
+
 .report__make {
-  margin-left: 0.6rem;
   padding: 0;
   border: 0;
   background: none;
