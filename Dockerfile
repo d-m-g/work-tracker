@@ -15,6 +15,9 @@ COPY . .
 COPY --from=ui /ui/dist web/ui/dist
 USER 1000:1000
 ENV PYTHONUNBUFFERED=1
+# The planner reads working hours ("10:00-22:00") in the server's local time, so
+# the server must keep yours, not UTC. Override with a TZ variable in Dokploy.
+ENV TZ=Europe/Helsinki
 EXPOSE 8765
 CMD ["python", "web/server.py", "--root", "/data", "--host", "0.0.0.0", "--port", "8765", \
      "--password-file", "/data/.password", "--viewer-password-file", "/data/.password-viewer", \
