@@ -298,7 +298,11 @@ class Planner:
         self.parser = parser
         if calendar == "auto":
             calendar = None
-            wanted = os.environ.get("PLANNER_CALENDAR", "on") != "off"
+            # Off by the variable, or by a `calendar.off` file in this data root --
+            # which reaches the widget too, where no shell variable does. One
+            # planner per calendar: two would rewrite each other's Planned blocks.
+            wanted = (os.environ.get("PLANNER_CALENDAR", "on") != "off"
+                      and not (root / "calendar.off").exists())
             if wanted and os.environ.get("PLANNER_CALDAV_USER"):
                 # iCloud over CalDAV: the server's way in, where EventKit is not.
                 from .caldav import from_env

@@ -833,7 +833,8 @@ python3 planner.py done 3 / rm 3 / replan
 * **Apple Calendar**: busy time is read from every calendar, and the plan is
   written to a calendar called *Planned* (created on first use), through a small
   Swift EventKit bridge compiled on first use. macOS asks for calendar access
-  once. `PLANNER_CALENDAR=off` plans without it.
+  once. `PLANNER_CALENDAR=off`, or a `calendar.off` file in the data root,
+  plans without it.
 * **iCloud over CalDAV** (the VM, or any server that is not a Mac): set
   `PLANNER_CALDAV_USER` to your Apple ID and `PLANNER_CALDAV_PASSWORD_FILE` to a
   file holding an *app-specific* password (appleid.apple.com → Sign-In and

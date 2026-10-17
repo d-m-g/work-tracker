@@ -50,5 +50,6 @@ __pycache__/
 # The planner: its database (tasks, the event log, the plan) and the compiled
 # EventKit bridge. Your data and a build product, not source.
 /planner.db
+/calendar.off
 /planner.db-journal
 /.planner-build/
