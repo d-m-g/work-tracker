@@ -79,6 +79,11 @@ class FakeICloud(CalDAVCalendar):
         self.calls: List[Tuple[str, str]] = []
         self.files: Dict[str, Tuple[str, Dict[str, str]]] = {}
 
+    def _feed(self, url):
+        assert url == "https://uni.example/feed.ics", url
+        return ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:l\nDTSTART:20261021T090000Z\n"
+                "DTEND:20261021T103000Z\nSUMMARY:Lecture\nEND:VEVENT\nEND:VCALENDAR")
+
     def _request(self, method, url, body="", headers=None):
         self.calls.append((method, url))
         if method == "PROPFIND" and url == "https://caldav.icloud.com/":
@@ -92,7 +97,12 @@ class FakeICloud(CalDAVCalendar):
                             _cal("/1/calendars/work/", "Work"),
                             _cal("/1/calendars/hol/", "Holidays", writable=False),
                             _cal("/1/calendars/plan/", "Planned"),
-                            _cal("/1/calendars/fix/", "Planned · static")), {}
+                            _cal("/1/calendars/fix/", "Planned · static"),
+                            _resp("/1/calendars/sub/", "<d:resourcetype><d:collection/><cs:subscribed "
+                                  'xmlns:cs="http://calendarserver.org/ns/"/></d:resourcetype>'
+                                  "<d:displayname>Lectures</d:displayname><cs:source "
+                                  'xmlns:cs="http://calendarserver.org/ns/"><d:href>webcal://uni.example/'
+                                  "feed.ics</d:href></cs:source>")), {}
         if method == "REPORT" and url.endswith("/work/"):
             return 207, _ms(_data("/1/calendars/work/a.ics", WORK_ICS)), {}
         if method == "REPORT" and url.endswith("/plan/"):
@@ -123,9 +133,10 @@ class TestCalDAV(unittest.TestCase):
 
     def test_events_are_timed_busy_and_not_our_own(self) -> None:
         events = self.cal.events(at("2026-10-19T00:00+00:00"), at("2026-10-26T00:00+00:00"))
-        self.assertEqual([e["title"] for e in events], ["Stand, up", "lunch"])
-        self.assertEqual(at(events[1]["start"]), at("2026-10-22T09:00+00:00"))  # Moscow noon
-        self.assertEqual(at(events[1]["end"]), at("2026-10-22T09:30+00:00"))
+        self.assertEqual([e["title"] for e in events], ["Stand, up", "Lecture", "lunch"])
+        self.assertFalse(events[1]["editable"])  # a subscription is read-only
+        self.assertEqual(at(events[2]["start"]), at("2026-10-22T09:00+00:00"))  # Moscow noon
+        self.assertEqual(at(events[2]["end"]), at("2026-10-22T09:30+00:00"))
         self.assertEqual(events[0]["calendar"], "Work")
         self.assertEqual(events[0]["color"], "#112233")
         self.assertTrue(events[0]["editable"])
@@ -164,6 +175,11 @@ class TestCalDAV(unittest.TestCase):
     def test_edit_refuses_read_only_and_repeating(self) -> None:
         with self.assertRaisesRegex(CalendarError, "read-only"):
             self.cal.edit({"id": HOME + "hol/x.ics", "occurrence": "2026-10-20T09:00:00Z"})
+        with self.assertRaisesRegex(CalendarError, "read-only"):
+            self.cal.edit({"id": "https://uni.example/feed.ics", "occurrence": "2026-10-21T09:00:00Z"})
+        with self.assertRaisesRegex(CalendarError, "no longer"):  # and no login sent there
+            self.cal.edit({"id": "https://elsewhere.example/x.ics", "occurrence": "2026-10-21T09:00:00Z"})
+        self.assertNotIn("https://elsewhere.example/x.ics", [u for _, u in self.cal.calls])
         href = HOME + "work/r.ics"
         self.cal.files[href] = (new_event("R", "", at("2026-10-20T09:00+00:00"), at("2026-10-20T10:00+00:00"))
                                 .replace("SUMMARY:R", "SUMMARY:R\r\nRRULE:FREQ=WEEKLY"), {})

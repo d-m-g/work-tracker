@@ -30,8 +30,9 @@ from xml.sax.saxutils import escape as xml_escape
 
 from .eventkit import CalendarError
 
-NS = {"d": "DAV:", "c": "urn:ietf:params:xml:ns:caldav", "a": "http://apple.com/ns/ical/"}
-D, C, A = ("{%s}" % NS[k] for k in ("d", "c", "a"))
+NS = {"d": "DAV:", "c": "urn:ietf:params:xml:ns:caldav", "a": "http://apple.com/ns/ical/",
+      "cs": "http://calendarserver.org/ns/"}
+D, C, A, CS = ("{%s}" % NS[k] for k in ("d", "c", "a", "cs"))
 
 #: The planner's own calendars and their colours, as in eventkit.swift.
 OWN = {"Planned": "#ec4899", "Planned · static": "#f5b041"}
@@ -244,7 +245,8 @@ class CalDAVCalendar:
 
     def _propfind(self, url: str, props: str, depth: str) -> Iterator[Tuple[str, Dict[str, ET.Element]]]:
         body = (f'<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:" '
-                f'xmlns:c="{NS["c"]}" xmlns:a="{NS["a"]}"><d:prop>{props}</d:prop></d:propfind>')
+                f'xmlns:c="{NS["c"]}" xmlns:a="{NS["a"]}" xmlns:cs="{NS["cs"]}">'
+                f"<d:prop>{props}</d:prop></d:propfind>")
         return self._multistatus("PROPFIND", url, body, depth)
 
     # -- discovery ---------------------------------------------------------
@@ -266,18 +268,30 @@ class CalDAVCalendar:
         return _HOMES[key]
 
     def calendars(self) -> List[Dict[str, Any]]:
-        """Every calendar that holds events: ``{"url", "name", "color", "editable"}``."""
+        """Every calendar that holds events: ``{"url", "name", "color", "editable", "source"}``.
+
+        ``source`` is set for a subscribed calendar (a university timetable, the
+        holidays): iCloud only stores its address, so its events are read from there.
+        """
         if self._calendars is None:
             home = self._home()
             found = []
             for href, props in self._propfind(
                 home,
-                "<d:resourcetype/><d:displayname/><a:calendar-color/>"
+                "<d:resourcetype/><d:displayname/><a:calendar-color/><cs:source/>"
                 "<c:supported-calendar-component-set/><d:current-user-privilege-set/>",
                 "1",
             ):
                 kind = props.get(D + "resourcetype")
-                if kind is None or kind.find("c:calendar", NS) is None:
+                if kind is None:
+                    continue
+                source = None
+                if kind.find("cs:subscribed", NS) is not None:
+                    source = props[CS + "source"].findtext("d:href", None, NS) if CS + "source" in props else None
+                    if not source:
+                        continue
+                    source = re.sub(r"^webcals?://", "https://", source)
+                elif kind.find("c:calendar", NS) is None:
                     continue
                 comps = props.get(C + "supported-calendar-component-set")
                 if comps is not None and not any(c.get("name") == "VEVENT" for c in comps):
@@ -290,7 +304,8 @@ class CalDAVCalendar:
                     "url": urljoin(home, href),
                     "name": (props[D + "displayname"].text or "") if D + "displayname" in props else "",
                     "color": color[:7] if color.startswith("#") else "#8e8e93",
-                    "editable": editable,
+                    "editable": editable and source is None,
+                    "source": source,
                 })
             self._calendars = found
         return self._calendars
@@ -333,6 +348,19 @@ class CalDAVCalendar:
             if C + "calendar-data" in props
         ]
 
+    def _feed(self, url: str) -> str:
+        """A subscribed calendar's .ics, fetched from its own server -- with no
+        Apple credentials, which are iCloud's and nobody else's.
+
+        ponytail: repeating events in a feed count only their first occurrence;
+        expand RRULEs here if a feed ever relies on them.
+        """
+        try:
+            with urllib.request.urlopen(url, timeout=self._timeout) as response:
+                return response.read().decode("utf-8", "replace")
+        except OSError as exc:
+            raise CalendarError(f"cannot read the subscribed calendar at {url.split('?')[0]}: {exc}") from exc
+
     # -- the four calls ----------------------------------------------------
 
     def events(self, start: datetime, end: datetime) -> List[Dict[str, Any]]:
@@ -341,7 +369,9 @@ class CalDAVCalendar:
         for calendar in self.calendars():
             if calendar["name"] in OWN:
                 continue
-            for href, _, ics in self._query(calendar["url"], start, end, expand=True):
+            found = ([(calendar["source"], "", self._feed(calendar["source"]))] if calendar["source"]
+                     else self._query(calendar["url"], start, end, expand=True))
+            for href, _, ics in found:
                 for event in vevents(ics):
                     span = span_of(event)
                     if (span is None or span[1] <= start or span[0] >= end
@@ -399,8 +429,11 @@ class CalDAVCalendar:
     def edit(self, change: Dict[str, str]) -> None:
         """Change one event: ``{"id", "occurrence", "title"?, "start"?, "end"?}``."""
         href = change["id"]
-        calendar = next((c for c in self.calendars() if href.startswith(c["url"])), None)
-        if calendar is not None and not calendar["editable"]:
+        calendar = next((c for c in self.calendars()
+                         if href == c["source"] or (not c["source"] and href.startswith(c["url"]))), None)
+        if calendar is None:  # never send the Apple login anywhere but iCloud's own calendars
+            raise CalendarError("that event is no longer in the calendar")
+        if not calendar["editable"]:
             raise CalendarError(f"the {calendar['name']} calendar is read-only — change it in the Calendar app")
         status, data, headers = self._request("GET", href)
         if status != 200:
