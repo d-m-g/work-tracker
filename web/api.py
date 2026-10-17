@@ -28,11 +28,14 @@ it cannot compute a duration the CLI would disagree with.
 
 from __future__ import annotations
 
+import os
 import threading
 from datetime import date, datetime
 from typing import Any, Callable, Dict, List
 
-from planner.planner import Planner, PlannerError
+from planner.parse import CLAUDE
+from planner.planner import PlannerError
+from planner.remote import open_planner
 from tracker.models import SessionState
 from tracker.storage import Storage
 from tracker.tracker import Clock, InvalidTaskError, WorkTracker
@@ -283,23 +286,17 @@ PLAN_COMMANDS = frozenset(
 
 def build_plan_payload(storage: Storage) -> Dict[str, Any]:
     """``GET /api/plan``: the tasks, their blocks, and what is on now."""
-    return Planner(storage.root).payload()
+    return open_planner(storage.root).payload()
 
 
 def build_stats_payload(storage: Storage) -> Dict[str, Any]:
     """``GET /api/stats``: the analysis, for the Insights page."""
-    return Planner(storage.root).stats()
+    return open_planner(storage.root).stats()
 
 
 def build_calendar_payload(storage: Storage, start: datetime, end: datetime) -> Dict[str, Any]:
     """``GET /api/calendar``: Apple Calendar's events in a window, for the week view."""
-    planner = Planner(storage.root)
-    if planner.calendar is None:
-        return {"events": [], "available": False, "error": None}
-    try:
-        return {"events": planner.calendar.events(start, end), "available": True, "error": None}
-    except Exception as exc:  # a week view without meetings beats no week view
-        return {"events": [], "available": True, "error": str(exc)}
+    return open_planner(storage.root).calendar_payload(start.isoformat(), end.isoformat())
 
 
 def _in_background(work: Callable[[], None]) -> None:
@@ -326,10 +323,13 @@ def run_plan_command(
     """
     if command not in PLAN_COMMANDS:
         raise UnknownCommandError(f"no such planner command: {command!r}")
-    planner = Planner(storage.root)
+    planner = open_planner(storage.root)
     if command == "add":
         task_id = planner.add(body.get("text"))
-        background(lambda: Planner(storage.root).parse(task_id))
+        # Where there is no Claude (the VM) the task stays "pending", and the Mac
+        # that drives this VM parses it on its next look -- see planner/remote.py.
+        if os.path.exists(CLAUDE):
+            background(lambda: open_planner(storage.root).parse(task_id))
     elif command == "edit":
         changes = body.get("changes")
         if not isinstance(changes, dict):

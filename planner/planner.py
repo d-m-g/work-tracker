@@ -515,17 +515,44 @@ class Planner:
     def review(self) -> Dict[str, Any]:
         """A short, honest weekly review by Claude, from the aggregates alone."""
         from .parse import review_week
+        try:
+            text = review_week(self.review_figures())
+        except ParseError as exc:
+            raise PlannerError(f"the review could not be written: {exc}") from exc
+        return self.save_review(text)
+
+    # The two halves of review() and parse(), apart: Claude runs where `claude` is
+    # (the Mac), and the result is stored where the planner is (the VM).
+
+    def review_figures(self) -> Dict[str, Any]:
+        """What the weekly review is written from."""
         figures = self.stats()
         figures.pop("review", None)
         titles = figures.pop("titles")
         for row in figures["dodged"]:
             row["title"] = titles.get(str(row["task_id"]), row.get("title"))
-        try:
-            text = review_week(figures)
-        except ParseError as exc:
-            raise PlannerError(f"the review could not be written: {exc}") from exc
+        return figures
+
+    def save_review(self, text: str) -> Dict[str, Any]:
         with self.db:
-            return self._meta("review", {"at": self.clock().isoformat(), "text": text})
+            return self._meta("review", {"at": self.clock().isoformat(), "text": str(text)})
+
+    def raw_text(self, task_id: Any) -> str:
+        """The words a task was typed in, for parsing."""
+        return self._task(task_id)["raw"]
+
+    def calendar_payload(self, start: str, end: str) -> Dict[str, Any]:
+        """``GET /api/calendar``: the calendar's events in a window, for the week view."""
+        if self.calendar is None:
+            return {"events": [], "available": False, "error": None}
+        try:
+            return {"events": self.calendar.events(_aware(start, "start"), _aware(end, "end")),
+                    "available": True, "error": None}
+        except Exception as exc:  # a week view without meetings beats no week view
+            return {"events": [], "available": True, "error": str(exc)}
+
+    def close(self) -> None:
+        self.db.close()
 
     # -- commands -------------------------------------------------------------
 
@@ -545,18 +572,28 @@ class Planner:
     def parse(self, task_id: int) -> None:
         """Fill in a task's fields from its raw text, then replan. A failed parse
         keeps the task with its defaults -- the text is never lost."""
-        row = self._task(task_id)
         try:
-            fields = self.parser(row["raw"], self.clock())
+            fields = self.parser(self.raw_text(task_id), self.clock())
         except ParseError as exc:
+            self.parsed(task_id, None, str(exc))
+            return
+        self.parsed(task_id, fields)
+
+    def parsed(self, task_id: Any, fields: Optional[Dict[str, Any]], error: Optional[str] = None) -> None:
+        """Store a parse: its fields, or (``fields`` None) that it failed. Then replan."""
+        task_id = self._task(task_id)["id"]
+        if fields is None:
             with self.db:
                 self.db.execute("UPDATE tasks SET parsed = -1 WHERE id = ?", (task_id,))
-                self._log(task_id, "parse_failed", error=str(exc))
+                self._log(task_id, "parse_failed", error=str(error))
             self.replan()
             return
+        # Only real columns: the names go into the SQL, and they may arrive over the wire.
+        known = {row[1] for row in self.db.execute("PRAGMA table_info(tasks)")}
+        fields = {name: value for name, value in fields.items() if name in known and name != "id"}
         with self.db:
-            columns = ", ".join(f"{name} = ?" for name in fields)
-            self.db.execute(f"UPDATE tasks SET {columns}, parsed = 1 WHERE id = ?",
+            columns = "".join(f"{name} = ?, " for name in fields)
+            self.db.execute(f"UPDATE tasks SET {columns}parsed = 1 WHERE id = ?",
                             (*fields.values(), task_id))
             self._log(task_id, "parsed", **fields)
         self.replan()

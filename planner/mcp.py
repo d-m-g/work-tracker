@@ -148,7 +148,7 @@ def serve(planner_factory: Callable[[], Planner], stdin: TextIO = sys.stdin,
         try:
             answer = handle(planner, message)
         finally:
-            planner.db.close()
+            planner.close()
         if answer is not None:
             stdout.write(json.dumps(answer, default=str) + "\n")
             stdout.flush()

@@ -13,6 +13,7 @@ from tracker.cli import default_root
 from tracker.utils import TrackerError
 
 from .planner import Planner
+from .remote import RemotePlanner, open_planner
 
 
 def _hm(stamp: str) -> str:
@@ -73,15 +74,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     commands.add_parser("start-new", help="make a task of free text and start it now").add_argument(
         "text", nargs="+")
     commands.add_parser("parse", help="(internal) parse a task's text").add_argument("id", type=int)
+    commands.add_parser("rpc", help="(internal) one JSON call from another machine's planner")
     args = parser.parse_args(argv)
+    root = args.root or default_root()
+
+    if args.command == "rpc":
+        from .remote import serve_rpc
+        return serve_rpc(Planner(root))  # always this disk's planner: this *is* the far end
 
     if args.command == "mcp":
         from .mcp import serve
-        root = args.root or default_root()
-        serve(lambda: Planner(root))
+        serve(lambda: open_planner(root))
         return 0
 
-    planner = Planner(args.root or default_root())
+    planner = open_planner(root)
     try:
         if args.command == "add":
             task_id = planner.add(" ".join(args.text))
@@ -103,7 +109,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             planner.start(args.id)
         elif args.command == "start-new":
             task_id = planner.start_new(" ".join(args.text))
-            _parse_later(args.root or default_root(), task_id)
+            _parse_later(root, task_id)
         elif args.command == "parse":
             planner.parse(args.id)
         elif args.command == "stop":
@@ -115,5 +121,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     plan = planner.payload()
+    if isinstance(planner, RemotePlanner):
+        # Tasks added on the website wait for a Mac to parse them: the VM has no
+        # Claude. The widget lists the plan every 30s, so this is that Mac.
+        # ponytail: a parse slower than the poll can run twice; harmless, costs a call.
+        for task in plan["tasks"]:
+            if task["parsed"] == "pending" and args.command != "parse":
+                _parse_later(root, task["id"])
     print(json.dumps(plan, indent=2) if args.json else _render(plan))
     return 0
