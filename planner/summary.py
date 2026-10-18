@@ -29,20 +29,26 @@ from .parse import CLAUDE, ParseError
 
 PROJECT = "pecto"
 PECTO_DIR = Path.home() / "_WORK_PROG" / "PECTO"
-#: Matches both of your git identities (Gorovoi, Gorovoy) and nobody else's.
-AUTHOR = "Gorovo"
+#: Only these commits count: git's --author is a regex over "Name <email>".
+AUTHOR = r"<gorovoi\.dmitrii@gmail\.com>"
+#: How your own chat messages are labelled, so Claude can tell them from the rest.
+ME = "Dmitrii (me)"
 #: ponytail: a busy month is cut here rather than chunked; chunk by week if it bites.
 MAX_CHARS = 120_000
 
 Days = Dict[date, List[str]]
 
-PROMPT = """You write the monthly work summary a contractor sends their client, Pecto.
-You get, per day: the hours tracked and the notes on those work sessions, the
-contractor's git commits, and messages from the Pecto group chat. Write in English:
-one short line on the month as a whole, then one bullet per day worked, saying
-what was done that day in plain words a non-engineer understands. Use the chat
-only to understand the work -- never quote it, never name people other than the
-contractor, never mention anything private. Do not invent work the inputs do not
+PROMPT = """You write the monthly work summary that Dmitrii Gorovoi, a contractor,
+sends his client, Pecto. It covers Dmitrii's work and nobody else's.
+You get, per day: the hours Dmitrii tracked and his notes on those sessions,
+Dmitrii's git commits, and that day's messages from the Pecto team chat, where
+his own are marked "Dmitrii (me)". Others in the chat (Vladimir and the rest of
+the team) do their own work: never list it, and never credit Dmitrii with it.
+Use the chat only to understand Dmitrii's commits and sessions, or for work
+Dmitrii himself says there that he did. Write in English: one short line on the
+month as a whole, then one bullet per day, saying what Dmitrii did that day in
+plain words a non-engineer understands. Never quote the chat, never name other
+people, never mention anything private. Do not invent work the inputs do not
 show; a day with only hours and no detail gets "general work" rather than a guess.
 Output plain text, no headings, no markdown other than "- " bullets."""
 
@@ -119,7 +125,8 @@ def telegram_by_day(chat: str, start: datetime, end: datetime, secrets: Path) ->
                 break
             if message.text:
                 sender = message.sender
-                name = getattr(sender, "first_name", None) or getattr(sender, "title", None) or "?"
+                name = ME if message.out else (
+                    getattr(sender, "first_name", None) or getattr(sender, "title", None) or "?")
                 days[message.date.astimezone().date()].append(f"{name}: {message.text[:500]}")
     return days
 
@@ -127,7 +134,8 @@ def telegram_by_day(chat: str, start: datetime, end: datetime, secrets: Path) ->
 def digest(sessions: Days, commits: Days, chat: Days) -> str:
     """Everything, day by day, as Claude reads it."""
     out = []
-    for day in sorted(set(sessions) | set(commits) | set(chat)):
+    # A day you neither tracked nor committed on is not a day you worked, whatever the chat says.
+    for day in sorted(set(sessions) | set(commits)):
         out.append(f"## {day.isoformat()} ({day:%A})")
         for title, lines in (("Tracked", sessions), ("Commits", commits), ("Chat", chat)):
             if lines.get(day):
