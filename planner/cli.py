@@ -87,11 +87,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         from .summary import summarize as write_summary
         try:
             text = write_summary(root, args.month, args.chat or None, paths=args.repo)
+            print(text, flush=True)  # first: a failed save must not lose Claude's work
             open_planner(root).save_summary(args.month, text)
         except (ParseError, TrackerError, ValueError, OSError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        print(text)
         return 0
 
     if args.command == "rpc":
