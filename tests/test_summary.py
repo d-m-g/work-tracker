@@ -40,6 +40,8 @@ class TestSummary(unittest.TestCase):
                       {date(2026, 10, 5): ["Dmitrii (me): shipped"], date(2026, 10, 6): ["Vladimir: did X"]})
         self.assertIn("## 2026-10-05 (Monday)\nTracked:\n- 2.00 h: lessons\nCommits:\n- app: add lessons", text)
         self.assertNotIn("2026-10-06", text)  # only chat that day: not a day worked
+        text = digest({date(2026, 10, 5): ["2.00 h: lessons"], date(2026, 10, 7): ["3.00 h: Pecto"]}, {}, {})
+        self.assertIn("## 2026-10-07 (Wednesday)\nNo detail of its own: it continued the work of 2026-10-05.", text)
 
     def test_only_your_prompts_in_pecto_projects(self) -> None:
         with TemporaryDirectory() as tmp:

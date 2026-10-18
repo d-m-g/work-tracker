@@ -157,9 +157,16 @@ def digest(sessions: Days, commits: Days, chat: Days, prompts: Optional[Days] = 
     """Everything, day by day, as Claude reads it."""
     prompts = prompts or {}
     out = []
+    previous = None
     # A day with none of your own traces is not a day you worked, whatever the chat says.
     for day in sorted(set(sessions) | set(commits) | set(prompts)):
         out.append(f"## {day.isoformat()} ({day:%A})")
+        bare = not commits.get(day) and not prompts.get(day) and all(
+            line.split(": ", 1)[-1].strip().lower() in (PROJECT, "(no note)") for line in sessions.get(day, []))
+        if bare and previous:
+            # Said here, not left to the prompt: Claude skips the rule as often as not.
+            out.append(f"No detail of its own: it continued the work of {previous.isoformat()}.")
+        previous = day
         for title, lines in (("Tracked", sessions), ("Commits", commits),
                              ("Asked his coding assistant", prompts), ("Chat", chat)):
             if lines.get(day):
