@@ -41,7 +41,8 @@ Days = Dict[date, List[str]]
 PROMPT = """You write the monthly work summary that Dmitrii Gorovoi, a contractor,
 sends his client, Pecto. It covers Dmitrii's work and nobody else's.
 You get, per day: the hours Dmitrii tracked and his notes on those sessions,
-Dmitrii's git commits, and that day's messages from the Pecto team chat, where
+Dmitrii's git commits, what Dmitrii asked his coding assistant (his own work,
+told in his own words), and that day's messages from the Pecto team chat, where
 his own are marked "Dmitrii (me)". Others in the chat (Vladimir and the rest of
 the team) do their own work: never list it, and never credit Dmitrii with it.
 Use the chat only to understand Dmitrii's commits and sessions, or for work
@@ -102,6 +103,25 @@ def commits_by_day(paths: Iterable[Path], author: str, start: datetime, end: dat
     return days
 
 
+def prompts_by_day(start: datetime, end: datetime, base: Path = Path.home() / ".claude" / "projects") -> Days:
+    """What you asked Claude Code in the Pecto projects: your words only, not its replies."""
+    days: Days = defaultdict(list)
+    for path in base.glob("*PECTO*/*.jsonl"):
+        with path.open(errors="replace") as lines:
+            for line in lines:
+                try:
+                    row = json.loads(line)
+                    content = row["message"]["content"]
+                    if row.get("type") != "user" or not isinstance(content, str) or content.startswith("<"):
+                        continue  # tool results, command echoes
+                    at = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if start <= at < end:
+                    days[at.astimezone().date()].append(" ".join(content.split())[:300])
+    return days
+
+
 def telegram_by_day(chat: str, start: datetime, end: datetime, secrets: Path) -> Days:
     """The messages of the one chat whose name contains ``chat``, in the window."""
     try:
@@ -133,13 +153,15 @@ def telegram_by_day(chat: str, start: datetime, end: datetime, secrets: Path) ->
     return days
 
 
-def digest(sessions: Days, commits: Days, chat: Days) -> str:
+def digest(sessions: Days, commits: Days, chat: Days, prompts: Optional[Days] = None) -> str:
     """Everything, day by day, as Claude reads it."""
+    prompts = prompts or {}
     out = []
-    # A day you neither tracked nor committed on is not a day you worked, whatever the chat says.
-    for day in sorted(set(sessions) | set(commits)):
+    # A day with none of your own traces is not a day you worked, whatever the chat says.
+    for day in sorted(set(sessions) | set(commits) | set(prompts)):
         out.append(f"## {day.isoformat()} ({day:%A})")
-        for title, lines in (("Tracked", sessions), ("Commits", commits), ("Chat", chat)):
+        for title, lines in (("Tracked", sessions), ("Commits", commits),
+                             ("Asked his coding assistant", prompts), ("Chat", chat)):
             if lines.get(day):
                 out.append(f"{title}:")
                 out.extend(f"- {line}" for line in lines[day])
@@ -166,7 +188,8 @@ def summarize(root: Path, month: str, chat: Optional[str], author: str = AUTHOR,
     start, end = month_bounds(month)
     sessions = sessions_by_day(root, start, end)
     commits = commits_by_day(paths if paths is not None else repos(), author, start, end)
+    prompts = prompts_by_day(start, end)
     messages = telegram_by_day(chat, start, end, root / ".secrets") if chat else {}
-    if not (sessions or commits):
+    if not (sessions or commits or prompts):
         raise ParseError(f"nothing tracked or committed for Pecto in {month}")
-    return write(digest(sessions, commits, messages))
+    return write(digest(sessions, commits, messages, prompts))
