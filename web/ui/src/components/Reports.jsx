@@ -122,12 +122,18 @@ function MonthReport({ days, month, summary: done, onClose }) {
   const halvedTracked = sum(halvedRows, 'tracked')
   const halvedCounted = sum(halvedRows, 'counted')
 
+  // No halved day: counted is tracked, and the halving lines would only say "0".
+  const anyHalved = halvedRows.length > 0
   const summary = [
     ['Days worked', String(rows.length)],
     ['Hours tracked', hours(tracked)],
-    [`Halved days (${halvedRows.length})`, `${hours(halvedTracked)} → ${hours(halvedCounted)}`],
-    ['Hours removed by halving', hours(tracked - counted)],
-    ['Hours counted', hours(counted)],
+    ...(anyHalved
+      ? [
+          [`Halved days (${halvedRows.length})`, `${hours(halvedTracked)} → ${hours(halvedCounted)}`],
+          ['Hours removed by halving', hours(tracked - counted)],
+          ['Hours counted', hours(counted)],
+        ]
+      : []),
   ]
 
   const title = `${PROJECT} — ${monthLabel(month)}`
@@ -139,7 +145,8 @@ function MonthReport({ days, month, summary: done, onClose }) {
     ...(done ? [done, ''] : []),
     ...rows.map(
       (row) =>
-        `${formatDate(row.at)}\t${hours(row.tracked)}\t${hours(row.counted)}${row.halved ? '\t(halved)' : ''}`,
+        `${formatDate(row.at)}\t${hours(row.tracked)}` +
+        (anyHalved ? `\t${hours(row.counted)}${row.halved ? '\t(halved)' : ''}` : ''),
     ),
   ].join('\n')
 
@@ -177,8 +184,12 @@ function MonthReport({ days, month, summary: done, onClose }) {
               <tr>
                 <th>Day</th>
                 <th>Tracked</th>
-                <th>Counted</th>
-                <th />
+                {anyHalved && (
+                  <>
+                    <th>Counted</th>
+                    <th />
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -188,10 +199,14 @@ function MonthReport({ days, month, summary: done, onClose }) {
                   <td>
                     <Num>{hours(row.tracked)}</Num>
                   </td>
-                  <td>
-                    <Num>{hours(row.counted)}</Num>
-                  </td>
-                  <td className="dim">{row.halved ? '½' : ''}</td>
+                  {anyHalved && (
+                    <>
+                      <td>
+                        <Num>{hours(row.counted)}</Num>
+                      </td>
+                      <td className="dim">{row.halved ? '½' : ''}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
