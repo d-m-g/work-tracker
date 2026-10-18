@@ -49,7 +49,9 @@ Dmitrii himself says there that he did. Write in English: one short line on the
 month as a whole, then one bullet per day, saying what Dmitrii did that day in
 plain words a non-engineer understands. Never quote the chat, never name other
 people, never mention anything private. Do not invent work the inputs do not
-show; a day with only hours and no detail gets "general work" rather than a guess.
+show. A day with hours but no detail of its own continued the most recent work
+described on an earlier day: say it continued that work, naming it. Only when
+no earlier day says anything, write "general work".
 Output plain text, no headings, no markdown other than "- " bullets."""
 
 
