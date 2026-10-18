@@ -846,7 +846,7 @@ python3 planner.py done 3 / rm 3 / replan
 * **What was done each month**, for the Pecto month report:
   `uv run --with telethon python3 planner.py summarize 2026-10` on the Mac reads
   that month's Pecto sessions, your commits in the repos under
-  `~/_WORK_PROG/PECTO` (`--repo` to choose) and the Pecto Telegram group
+  `~/_WORK_PROG/PECTO` (`--repo` to choose) and the "Pecto dev team" Telegram group
   (`--chat NAME`, `--chat ''` to skip), and asks Claude for a day-by-day account.
   Only that account is stored, on the VM, in `summaries.json`. Telegram needs
   `.secrets/telegram.json` (`{"api_id": …, "api_hash": "…"}` from

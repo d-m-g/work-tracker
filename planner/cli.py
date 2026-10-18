@@ -77,7 +77,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     commands.add_parser("rpc", help="(internal) one JSON call from another machine's planner")
     summarize = commands.add_parser("summarize", help="write what was done for Pecto in a month")
     summarize.add_argument("month", metavar="YYYY-MM")
-    summarize.add_argument("--chat", default="Pecto", help="Telegram chat name ('' to skip)")
+    summarize.add_argument("--chat", default="Pecto dev team", help="Telegram chat name ('' to skip)")
     summarize.add_argument("--repo", type=Path, action="append", help="default: every repo in ~/_WORK_PROG/PECTO")
     args = parser.parse_args(argv)
     root = args.root or default_root()
